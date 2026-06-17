@@ -19,7 +19,7 @@ load_dotenv(find_dotenv())
 
 # 使用 OpenAI 兼容接口初始化模型；温度调低，让路由和回答更稳定
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     temperature=0.1,
     model_provider="openai",
 )
@@ -28,7 +28,8 @@ llm = init_chat_model(
 # name 是子智能体唯一标识，流式输出里的 subagent_type 会对应它；
 # description 主要给主智能体看，用来判断什么时候应该调用该助手；
 # system_prompt 是子智能体自己的角色和行为约束；
-# tools 是该子智能体可用的工具列表，不填 model 时通常继承主智能体模型。
+# tools 是该子智能体可用的工具列表；
+# model 不填时通常继承主智能体模型。
 weather_agent = {
     "name": "weather_helper",
     "description": "用于查询天气信息。当用户询问天气时，请调用此助手。",
@@ -64,11 +65,11 @@ translate_agent = {
 main_agent = create_deep_agent(
     model=llm,
     tools=[],
-    subagents=[weather_agent, math_agent, translate_agent],
+    subagents=[weather_agent, math_agent, translate_agent],     # 通过subagents参数注册子智能体
     system_prompt="""
     你是一个负责统筹任务的主智能体。
     请根据用户需求选择合适的子智能体完成任务。
-    你不直接执行天气查询、数学计算或翻译任务，而是通过子智能体完成。
+    你不直接执行天气查询、数学计算或翻译任务，而是通过子智能体完成。      
     """,
 )
 
@@ -100,9 +101,10 @@ def test_stream(query):
                     if last_msg.tool_calls:
                         for tool_call in last_msg.tool_calls:
                             if tool_call["name"] == "task":
-                                # DeepAgents 用内置 task 工具表示“分派给某个子智能体”
+                                # DeepAgents 用内置 task 工具表示“分派给某个子智能体”【所有子智能体的tool_calls的name属性都是task，内部通过id来区分】   子智能体接收tool_call中的args的description作为原始输入，自动提取符合工具输入的参数
+                                # task 执行完成，子智能体结果以 ToolMessage 形式返回
                                 print(
-                                    f"【model】决定调用子智能体{tool_call['args']['subagent_type']}"
+                                    f"【model】决定调用子智能体{tool_call['args']['subagent_type']}"      # subagent_type与字典里的 name 一一对应
                                 )
                             else:
                                 print(
@@ -120,7 +122,7 @@ def test_stream(query):
                     )
 
 
-test_stream("北京今天的天气怎么样？")
+test_stream("北京今天的天气怎么样？将'北京是中国的行政中心'翻译成英文")
 # test_stream("998+889 运算后等于多少？")
 # test_stream("请将'你是最棒的'翻译成英文，并且查询今天北京的天气信息。")
 test_stream("请将'你是最棒的'翻译成英文。")

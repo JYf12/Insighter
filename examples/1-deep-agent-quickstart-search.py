@@ -18,7 +18,7 @@ from tavily import TavilyClient
 # 读取项目根目录中的 .env，示例依赖 LLM_QWEN_MAX 和 TAVILY_API_KEY
 load_dotenv(find_dotenv())
 
-llm_name = os.getenv("LLM_QWEN_MAX")
+llm_name = os.getenv("LLM_MODEL_ID")
 tavily_key = os.getenv("TAVILY_API_KEY")
 
 
@@ -117,3 +117,14 @@ print(result)
 # 如果只关心最终报告，可以直接读取 result["messages"][-1].content，
 # 不必把完整的 result 执行轨迹展示给最终用户。
 print(result["messages"][-1].content)
+
+"""
+DeepAgents的单词任务执行流程（无子智能体）
+
+用户提问---调用搜索工具---[工具返回内容太大保存到文件系统]---[调用文件系统工具读取工具返回结果]---基于内容回答
+
+注意：
+--工具返回内容是否保存至文件系统，需要时再读取是由llm动态决定的，不一定会触发{主要看这次工具返回的内容是否超限}
+--通过offset=0 and limit=200 来控制文件读取的偏移量和大小
+
+"""

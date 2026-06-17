@@ -20,7 +20,7 @@ load_dotenv(find_dotenv())
 
 # 使用 OpenAI 兼容接口初始化模型；温度调低，让路由和回答更稳定
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     temperature=0.1,
     model_provider="openai",
 )
@@ -128,7 +128,7 @@ async def test_stream(query):
 if __name__ == "__main__":
     # asyncio.run(test_stream("北京今天的天气怎么样？"))
     async def batch_run():
-        # 这里得到的是协程对象；传给 gather 后，会由事件循环并发调度
+        # 这里得到的是协程对象；传给 gather 后，会由事件循环并发调度     异步函数不会立刻执行完整逻辑，而是先得到一个协程对象。
         task1 = test_stream("北京今天的天气怎么样？")
         task2 = test_stream("请将'你是最棒的'翻译成英文。")
 
@@ -136,7 +136,7 @@ if __name__ == "__main__":
         print(type(task1))
         print(type(task2))
 
-        # gather 会等待两个协程都完成；哪个请求先拿到结果，就会先输出自己的流式片段
+        # gather 会等待两个协程都完成；哪个请求先拿到结果，就会先输出自己的流式片段（gather用于同时发起多个任务）
         await asyncio.gather(task1, task2)
 
     asyncio.run(batch_run())
@@ -144,4 +144,7 @@ if __name__ == "__main__":
 """
 同步版参考 examples/3-dict-subagents-routing.py。
 本文件的重点是把单任务 stream 观察，扩展为多任务异步并发观察。
+
+异步操作可以不用等待某一个请求彻底结束后再处理下一个请求，在资源没有抢占（CPU）的情况下多个任务可以并发运行
+（异步的本质就是利用I/O、网络响应等待时间去做其他事情，从而实现高效的并发处理。）
 """

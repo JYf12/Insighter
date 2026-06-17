@@ -1,0 +1,7 @@
+class:
+  single_assistant_task:
+    - "根据药品记录销售表中的数据生成一份按区域差异化分析的销售报告"
+    - "根据公开数据总结一份2026年AI电商行业的应用趋势"
+  multiple_assistant_task:
+    - ""
+    - ""

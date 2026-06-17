@@ -24,7 +24,7 @@ from langgraph.graph import END, StateGraph, add_messages
 load_dotenv(find_dotenv())
 
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )
 
@@ -32,7 +32,7 @@ llm = init_chat_model(
 class ResearchPlanState(TypedDict):
     # DeepAgents 调用 LangGraph 子图时，会通过 messages 传入任务，也会从 messages 读取结果。
     # add_messages 表示节点返回的新消息会追加到消息链，而不是覆盖历史消息。
-    messages: Annotated[list, add_messages]
+    messages: Annotated[list, add_messages]             #  DeepAgents 通过 messages 给子智能体传任务，也通过它读取结果。
     topic: str
     depth: Literal["quick", "deep"]
     plan: list[str]
@@ -128,13 +128,13 @@ workflow.add_edge("quick_plan", "finalize_plan")
 workflow.add_edge("deep_plan", "finalize_plan")
 workflow.add_edge("finalize_plan", END)
 
-compiled_graph = workflow.compile()
+compiled_graph = workflow.compile()         # 编译成可执行的子智能体
 
 
 research_planner_graph = CompiledSubAgent(
     name="research_planner_graph",
     description="用于把开放研究问题拆解成可执行的研究计划，适合行业趋势、技术调研、报告规划等任务。",
-    runnable=compiled_graph,
+    runnable=compiled_graph,                # runnable指定真正执行任务的对象，可以是编译后的 LangGraph 图或 LangChain Agent
 )
 
 

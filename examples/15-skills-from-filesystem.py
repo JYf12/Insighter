@@ -5,7 +5,7 @@ DeepAgents Skill：通过 FilesystemBackend 加载外置技能
 本示例使用 emoji-translator 技能，把用户文本转换成表情符号
 用户请求 -> Agent 读取 Skill 元数据 -> 按需加载 SKILL.md -> 根据技能规则生成回复
 """
-
+import os
 from pathlib import Path
 
 from deepagents import create_deep_agent
@@ -16,7 +16,7 @@ from langchain.chat_models import init_chat_model
 load_dotenv(find_dotenv())
 
 
-llm = init_chat_model(model="qwen-max", model_provider="openai")
+llm = init_chat_model(model=os.getenv("LLM_MODEL_ID"), model_provider="openai")
 
 
 # Skill 文件需要通过 Backend 暴露给 Agent
@@ -34,7 +34,7 @@ main_agent = create_deep_agent(
     model=llm,
     backend=file_backend,
     skills=[
-        "skills",
+        "skills",               # 加载 skills 目录下的技能，目录由file_backend.root_dir 指定的目录拼接该路径得到
     ],
     system_prompt="你是一个智能助手，可以使用 SKILL 技能",
 )

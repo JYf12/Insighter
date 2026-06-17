@@ -18,7 +18,7 @@ from langgraph.types import Command
 load_dotenv(find_dotenv())
 
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )
 
@@ -80,8 +80,9 @@ main_agent = create_deep_agent(
     请根据用户需求调用合适的工具，并使用中文回复执行结果
     """,
     # interrupt_on 用工具名配置哪些动作需要人工审批
-    # True 表示使用默认审批选项：approve、edit、reject
+    # True 表示使用默认审批选项：approve、edit、reject、respond
     # False 表示该工具不需要中断，可以直接执行
+    # ["approve", "reject"] 表示自定义审批类型（不允许edit和respond）
     interrupt_on={
         "delete_database": True,
         "delete_file": True,
@@ -102,7 +103,7 @@ result_1 = main_agent.invoke(
             }
         ]
     },
-    config=thread_config,
+    config=thread_config,           # 非常重要，thread_id用来标识同一次会话和同一条执行线程。后面恢复执行时，必须使用相同的 thread_id
 )
 
 
@@ -110,13 +111,13 @@ result_1 = main_agent.invoke(
 # __interrupt__ 是一个列表，里面保存 Interrupt 对象
 # 每个 Interrupt 的 value 是一个字典，核心结构可以理解为：
 # {
-#     "action_requests": [
+#     "action_requests": [                                                                # 模型准备执行、但还没真正执行的高风险工具调用
 #         {"name": "delete_database", "args": {"table_name": "user"}},
-#         {"name": "delete_file", "args": {"file_name": "zhaoweifeng.txt"}},
+#         {"name": "delete_file", "args": {"file_name": "zhaoweifeng.txt"}},              # 每个被拦截工具允许的人工决策类型
 #     ],
 #     "review_configs": [
-#         {"action_name": "delete_database", "allowed_decisions": ["approve", "edit", "reject"]},
-#         {"action_name": "delete_file", "allowed_decisions": ["approve", "edit", "reject"]},
+#         {"action_name": "delete_database", "allowed_decisions": ["approve", "edit", "reject", "respond"]},
+#         {"action_name": "delete_file", "allowed_decisions": ["approve", "edit", "reject", "respond"]},
 #     ],
 # }
 # action_requests 表示模型准备执行、但还没真正执行的高风险工具调用
@@ -142,15 +143,24 @@ if interrupts:
         elif action_name == "delete_file":
             decisions.append({"type": "approve"})
 
-    # 第二次 invoke 不再传用户原始问题，而是传 Command(resume=...)
+    # 第二次 invoke 不再传用户原始问题，而是传 Command(resume=...)  用Command恢复执行
     # config 必须继续使用第一次相同的 thread_id，Agent 才能找到之前暂停的位置
     result_2 = main_agent.invoke(
         Command(
             resume={
-                "decisions": decisions,
+                "decisions": decisions,                 # decisions 的数量和顺序要和 action_requests 对应上。
             }
         ),
         config=thread_config,
     )
 
     print(f"最终结果：{result_2['messages'][-1].content}")
+
+
+"""
+人工决策类型：
+    --approve:按模型原计划继续执行工具   具和参数都没问题，人工确认可以执行
+    --reject:拒绝这次工具调用	动作风险太高，或者模型理解错了用户意图
+    --edit:修改工具名或参数后再执行	意图正确，但参数需要人工修正
+    --respond:人工直接提供返回值 不执行工具   适用于需要澄清问题或获取人类判断的场景
+"""

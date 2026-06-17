@@ -18,12 +18,12 @@ load_dotenv(find_dotenv())
 
 
 # InMemoryStore 是教学用内存 Store，进程重启后数据会丢失
-# 生产环境可以替换成 RedisStore、数据库 Store 或其他持久化 Store
-store = InMemoryStore()
+# 生产环境可以替换成 RedisStore、数据库 Store 或其他持久化 Store       StoreBackend 本身更像一个适配器：它负责把“读写文件”转换成“读写 Store”。真正存到哪里，取决于传进去的 store 是什么。
+store = InMemoryStore()         # 这里选择InMemoryStore作为适配器的对象，真正的文件内容存储到内存中 程序退出后会丢失
 
 
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )
 
@@ -33,8 +33,8 @@ llm = init_chat_model(
 # 底层实际不会写本地文件，而是写入上面的 store
 main_agent = create_deep_agent(
     model=llm,
-    store=store,
-    backend=StoreBackend,
+    store=store,                                # 表示具体存到哪个 Store 实例中
+    backend=StoreBackend,                       # 表示文件系统操作走 Store
     system_prompt="""
     你是一个智能助手
     当用户提供重要个人信息时，请保存到 user_profile.txt
@@ -63,9 +63,14 @@ result_a = main_agent.invoke(
 )
 print(f"第一次回复结果：{result_a['messages'][-1].content}")
 
+"""
+执行流程：
+    用户提问--主智能体调用write_file工具写入个人信息--工具返回
+"""
+
 
 # 直接读取 Store，观察 StoreBackend 写入的底层数据
-# DeepAgents 文件系统默认使用 filesystem 命名空间保存文件式内容
+# DeepAgents 文件系统默认使用 filesystem 命名空间保存文件式内容                key:文件名     value:写入内容
 print("读取 Store 中保存的用户信息")
 items = store.search(("filesystem",))
 for item in items:
@@ -86,4 +91,4 @@ result_b = main_agent.invoke(
     },
     config=config_b,
 )
-print(f"第二次回复结果：{result_b['messages'][-1].content}")
+print(f"第二次回复结果：{result_b['messages'][-1].content}")            # 跨线程读取store中保存的长期记忆

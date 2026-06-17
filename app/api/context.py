@@ -3,6 +3,13 @@
 
 负责在异步请求链路中保存当前任务的 thread_id 和 session_dir
 工具、智能体和监控模块可以在深层调用中读取这些值，而不需要层层传参
+
+
+为什么不用普通全局变量？
+
+因为 FastAPI 是异步并发服务。多个用户的请求可能在同一个线程中交替执行，如果用全局变量，用户 A 的 session_id 可能被用户 B 覆盖，导致消息或文件串台。
+
+ContextVar 是协程级上下文变量，更适合 asyncio 场景。只要在同一个任务调用链里，深层工具也能拿到当前会话自己的值。
 """
 
 from contextvars import ContextVar, Token
@@ -11,11 +18,11 @@ from typing import Optional
 # ContextVar 是协程级上下文变量，适合 FastAPI 这类异步 Web 服务
 # 它可以避免多个并发请求共用全局变量时出现 thread_id 或 session_dir 串台
 _session_dir_ctx: ContextVar[Optional[str]] = ContextVar(
-    "session_dir",
+    "session_dir",                                                      # 当前任务生成文件的会话目录
     default=None,
 )
 _thread_id_ctx: ContextVar[Optional[str]] = ContextVar(
-    "thread_id",
+    "thread_id",                                                        # 当前任务对应的前端连接和 Agent 执行线程
     default=None,
 )
 

@@ -25,7 +25,7 @@ store = InMemoryStore()
 
 
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )
 

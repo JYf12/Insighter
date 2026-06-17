@@ -15,6 +15,6 @@ load_dotenv(find_dotenv())
 
 # 使用 OpenAI 兼容协议接入模型；具体模型名由 .env 中的 LLM_QWEN_MAX 控制
 model = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )

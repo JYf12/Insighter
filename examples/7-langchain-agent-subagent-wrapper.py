@@ -23,7 +23,7 @@ from langchain_core.tools import tool
 load_dotenv(find_dotenv())
 
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )
 
@@ -95,8 +95,8 @@ deep_agent = create_deep_agent(
     你是深度研搜系统的主智能体。
     当用户需要查找资料、收集证据、检索公开信息或内部知识库时，必须调用 research_retriever_agent。
     你不直接检索资料，只负责分派任务并整理子智能体返回的结果。
-    """,
-    subagents=[research_retriever_subagent],
+    """,                                                # 在此例中，公开检索和内部知识库检索表现为两个并行的task分配，都交由子智能体完成，主智能体只负责将最后结果整合后回答
+    subagents=[research_retriever_subagent],            # 子智能体内部的工具对主智能体是透明的 主智能体只知道以task的形式将任务分配给子智能体，子智能体内部如何处理工具调用，以及如何返回结果，主智能体不知道
 )
 
 
@@ -105,7 +105,7 @@ for chunk in deep_agent.stream(
         "messages": [
             {
                 "role": "user",
-                "content": "请同时检索人工智能机器人行业的公开趋势，以及我们内部知识库里的项目经验。",
+                "content": "请搜索总结人工智能机器人行业的公开趋势，以及我们内部的项目经验。",
             }
         ]
     }

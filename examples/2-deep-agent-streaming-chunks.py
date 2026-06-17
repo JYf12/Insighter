@@ -18,7 +18,7 @@ from tavily import TavilyClient
 # 读取项目根目录中的 .env，示例依赖 LLM_QWEN_MAX 和 TAVILY_API_KEY
 load_dotenv(find_dotenv())
 
-llm_name = os.getenv("LLM_QWEN_MAX")
+llm_name = os.getenv("LLM_MODEL_ID")
 tavily_key = os.getenv("TAVILY_API_KEY")
 
 
@@ -121,3 +121,8 @@ for chunk in stream:
             tool_return_result = last_msg.content[:100] + "..."
             tool_name = last_msg.name
             print(f"【agent】调用了{tool_name}工具，返回的结果为：{tool_return_result}")
+
+
+"""
+除了普通工具外，DeepAgents还会触发'task'的子智能体工具调用
+"""

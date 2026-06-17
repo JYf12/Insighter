@@ -10,7 +10,7 @@ import os
 
 from deepagents import create_deep_agent
 from dotenv import find_dotenv, load_dotenv
-from langchain.agents.middleware import ModelCallLimitMiddleware
+from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -19,7 +19,7 @@ load_dotenv(find_dotenv())
 
 
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )
 
@@ -74,9 +74,14 @@ main_agent = create_deep_agent(
     checkpointer=checkpointer,
     system_prompt="回答使用中文，调用对应的工具实现对应的功能",
     middleware=[
-        ModelCallLimitMiddleware(
-            thread_limit=1,  # 同一个 thread_id 下累计最多调用 1 次模型
-            run_limit=1,  # 当前这次 invoke 内最多调用 1 次模型
+        # ModelCallLimitMiddleware(
+        #     thread_limit=2,  # 同一个 thread_id 下累计最多调用 1 次模型
+        #     run_limit=2,  # 当前这次 invoke 内最多调用 1 次模型
+        #     exit_behavior="error",  # 超限后抛出异常，便于后端统一捕获处理
+        # )
+        ToolCallLimitMiddleware(
+            thread_limit=2,  # 同一个 thread_id 下累计最多调用 1 次工具
+            run_limit=2,  # 当前这次 invoke 内最多调用 1 次工具
             exit_behavior="error",  # 超限后抛出异常，便于后端统一捕获处理
         )
     ],

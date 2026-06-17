@@ -112,7 +112,8 @@ async def run_deep_agent(task_query, session_id):
         # astream 会持续产出模型节点、工具节点和子智能体节点的状态片段
         async for chunk in main_agent.astream(
             {"messages": [{"role": "user", "content": task_query + path_instruction}]},
-            config=config,
+            config=config
+            # subgraphs=True      # 如果希望把子智能体内部执行过程也拿出来，就要注意开启子图流式输出
         ):
             # chunk 形如 {"model": {"messages": [...]}}，这里主要关心模型最新消息
             for node_name, state in chunk.items():
@@ -135,6 +136,14 @@ async def run_deep_agent(task_query, session_id):
                                             ]
                                         },
                                     )
+                                # elif tool_call["name"] == "write_file_content":
+                                #     monitor.report_tool(
+                                #         "write_file",
+                                #         {
+                                #             "filename": tool_call["args"]["filename"],
+                                #             "content": tool_call["args"]["content"],
+                                #         },
+                                #     )
                         elif last_msg.content:
                             # 模型没有继续调用工具时，最新文本内容就是本轮可反馈给前端的结果
                             print(

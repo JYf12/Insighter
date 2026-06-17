@@ -30,6 +30,12 @@ from pydantic import BaseModel
 from app.agent.main_agent import run_deep_agent
 from app.api.monitor import manager
 
+"""
+uvicorn 启动时创建一个主事件循环,多个 HTTP/WebSocket 请求通过协程（coroutine）在这个循环中交替执行,
+当某个协程 await 等待 I/O 时（如数据库查询、网络请求），事件循环会切换到其他协程
+
+
+"""
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """
@@ -45,10 +51,10 @@ async def lifespan(_app: FastAPI):
 
 
 # 当前文件位于 app/api/server.py，运行时目录统一收敛到 app 目录
-current_dir = Path(__file__).resolve().parent
-project_root = current_dir.parent
+current_dir = Path(__file__).resolve().parent           # /app/api
+project_root = current_dir.parent                       # /app
 
-app = FastAPI(title="DeepAgents API", lifespan=lifespan)
+app = FastAPI(title="DeepAgents API", lifespan=lifespan)            # 让 ConnectionManager 在服务启动阶段记住 FastAPI 当前的事件循环。
 
 # 保存 thread_id -> 后台 Agent 任务，用于同一会话任务替换和主动取消
 active_tasks: dict[str, asyncio.Task] = {}
@@ -107,7 +113,7 @@ async def run_task(request: TaskRequest):
     # create_task 把长耗时 Agent 执行交给事件循环，接口本身不用等待最终结果
     task = asyncio.create_task(run_deep_agent(request.query, thread_id))
     active_tasks[thread_id] = task
-    task.add_done_callback(lambda finished_task: _forget_task(thread_id, finished_task))
+    task.add_done_callback(lambda finished_task: _forget_task(thread_id, finished_task))        # 任务结束回调（无论结果如何），通过 _forget_task 删除
 
     return {"status": "started", "thread_id": thread_id}
 
@@ -129,9 +135,9 @@ async def cancel_task(thread_id: str):
     task.cancel()
     try:
         await asyncio.wait_for(task, timeout=1.0)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError:              # 如果task任务已经被成功取消，则会抛出CancelledError异常
         _forget_task(thread_id, task)
-        return {"status": "cancelled", "thread_id": thread_id}
+        return {"status": "cancelled", "thread_id": thread_id}      # 返回Http响应  monitor报告任务进度在main_agent中实现
     except asyncio.TimeoutError:
         return {"status": "cancelling", "thread_id": thread_id}
     except Exception as e:
@@ -139,7 +145,7 @@ async def cancel_task(thread_id: str):
         return {"status": "cancelled", "thread_id": thread_id, "message": str(e)}
 
     _forget_task(thread_id, task)
-    return {"status": "cancelled", "thread_id": thread_id}
+    return {"status": "cancelled", "thread_id": thread_id}          # HTTP 告诉前端“取消请求已处理”，WebSocket 才告诉前端“后台任务已经真正进入取消状态”。
 
 
 @app.post("/api/upload")
@@ -157,16 +163,16 @@ async def upload_files(files: List[UploadFile] = File(...), thread_id: str = For
         thread_id (str): 关联的任务会话 ID。
     """
     # 上传文件先按会话隔离保存，避免不同任务读取到彼此的附件
-    target_dir = updated_dir / f"session_{thread_id}"
+    target_dir = updated_dir / f"session_{thread_id}"       # 下次任务发起时，会先检查该目录下是否有文件，有则复制到会话目录下
     target_dir.mkdir(parents=True, exist_ok=True)
 
     saved_files = []
     for file in files:
         file_path = target_dir / file.filename
-        # 直接复制文件流，避免大文件一次性读入内存
-        with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        saved_files.append(file.filename)
+        # 直接复制文件流，避免大文件一次性读入内存   好处：避免大文件一次性读入内存（分块读取时内存恒定占用很小的空间）---适用于任意大小的文件
+        with file_path.open("wb") as buffer:        # 分块读取，逐块写入
+            shutil.copyfileobj(file.file, buffer)       # 分块边读、边写
+        saved_files.append(file.filename)               # with 块结束时，buffer 自动关闭并刷新到磁盘 ✅ 文件已保存完成
 
     return {"status": "uploaded", "files": saved_files}
 
@@ -185,10 +191,10 @@ async def download_file(path: str):
     """
     try:
         # resolve 后再做 is_relative_to，防止 `../` 之类的路径穿越到 output 之外
-        abs_path = Path(path).resolve()
+        abs_path = Path(path).resolve()     # resolve() 会把路径规整成绝对路径
         output_abs = output_dir.resolve()
 
-        if not abs_path.is_relative_to(output_abs):
+        if not abs_path.is_relative_to(output_abs):                 # is_relative_to() 检查路径是否在给定路径下
             return {"error": "拒绝访问: 只能下载输出目录下的文件"}
     except Exception:
         return {"error": "无效的路径参数"}
@@ -213,7 +219,7 @@ async def list_files(path: str):
     Args:
         path (str): 目标目录的绝对路径 (必须在 output 目录下)。
     """
-    print(f"[DEBUG] 请求文件列表: {path}")
+    print(f"[DEBUG] 请求文件列表: {path}")                # 前端通常是在收到 session_created 事件后，拿到当前会话的 output/session_xxx 路径，再请求列举文件
 
     try:
         # 和下载接口保持同一条安全边界：前端只能查看 output 目录内部内容

@@ -33,7 +33,7 @@ file_backend = FilesystemBackend(
 
 
 llm = init_chat_model(
-    model=os.getenv("LLM_QWEN_MAX"),
+    model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )
 
@@ -81,3 +81,13 @@ result_2 = main_agent.invoke(
     }
 )
 print(f"最终结果：{result_2['messages'][-1].content}")
+"""
+
+创建文件请求执行过程：
+    1.主智能体调用general-purpose子智能体（传递原始需求），子智能体完成md临时文件的创建并写入文档内容-->工具返回（task）
+    2.主智能体调用readfile工具读取临时md文件，获取文档内容（这里读取每次偏移100行）-->工具返回（主智能体会多次调用read_file工具直至读取所有内容）
+    3.主智能体回答
+
+创建/读取文件均在file_backend指定的root_dir目录下完成
+
+"""

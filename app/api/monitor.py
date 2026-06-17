@@ -25,6 +25,7 @@ class ToolMonitor:
 
     _instance = None
 
+    # 单例模式配置全局监视器
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(ToolMonitor, cls).__new__(cls)
@@ -87,9 +88,15 @@ class ToolMonitor:
 
         FastAPI 的 WebSocket 必须在创建它的事件循环中发送消息
         如果当前代码已经在同一个循环里，直接 create_task；否则使用线程安全投递
+
+        get_running_loop() 返回的是调用它时所在的执行上下文  这个上下文可能是：主循环、临时循环、或者根本没有循环
+        manager.loop 是在服务启动时固定的 FastAPI 主循环
+
+        get_running_loop()在异步协程中一定属于主事件循环，在没有线程池的同步工具中也属于主事件循环
+                          但在有线程池的同步工具中（工作线程没有循环）与主事件循环就没有关系了
         """
         try:
-            current_loop = asyncio.get_running_loop()
+            current_loop = asyncio.get_running_loop()           # 决定因素不是"工具如何启动"，而是"monitor._emit() 被谁、在什么上下文中调用"
         except RuntimeError:
             current_loop = None
 
@@ -175,8 +182,8 @@ class ConnectionManager:
         """向指定 WebSocket 发送纯文本消息"""
         await websocket.send_text(message)
 
-    async def send_to_thread(self, message: dict[str, Any], thread_id: str) -> None:
-        """向指定 thread_id 对应的前端连接发送 JSON 消息"""
+    async def send_to_thread(self, message: dict[str, Any], thread_id: str) -> None:                # WebSocket 连接属于 FastAPI 的事件循环。后台线程不能直接 await websocket.send_json(...)
+        """向指定 thread_id 对应的前端连接发送 JSON 消息"""                                              # 监控模块会先拿到 manager.loop，再用 asyncio.run_coroutine_threadsafe(...) 把发送动作投递回正确的事件循环。
         if thread_id in self.active_connections:
             websocket = self.active_connections[thread_id]
             await websocket.send_json(message)

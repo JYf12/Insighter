@@ -179,17 +179,17 @@ export function useDeepAgentSession() {
       return;
     }
 
-    refreshFiles().catch((error: unknown) => {
-      setLastError(error instanceof Error ? error.message : "文件列表刷新失败");
-    });
-
-    const timer = window.setInterval(() => {
-      refreshFiles().catch((error: unknown) => {
-        setLastError(error instanceof Error ? error.message : "文件列表刷新失败");
-      });
-    }, isRunning ? 2500 : 6000);
-
-    return () => window.clearInterval(timer);
+    // refreshFiles().catch((error: unknown) => {
+    //   setLastError(error instanceof Error ? error.message : "文件列表刷新失败");
+    // });
+    //
+    // const timer = window.setInterval(() => {
+    //   refreshFiles().catch((error: unknown) => {
+    //     setLastError(error instanceof Error ? error.message : "文件列表刷新失败");
+    //   });
+    // }, isRunning ? 5000 : 30000);
+    //
+    // return () => window.clearInterval(timer);
   }, [isRunning, refreshFiles, sessionPath]);
 
   const submitTask = useCallback(

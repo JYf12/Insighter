@@ -219,7 +219,7 @@ if __name__ == "__main__":
     print(
         execute_sql_query.invoke(
             {
-                "query": "SELECT * FROM `drugs` dgs join sales_records srd on dgs.drug_id = srd.drug_id"
+                "query": "SELECT * FROM `drugs` dgs join sales_records srd on dgs.drug_id = srd.drug_id and region = '华北区'"
             }
         )
     )
