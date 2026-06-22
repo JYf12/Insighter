@@ -11,7 +11,6 @@ import shutil
 from pathlib import Path
 
 from deepagents import create_deep_agent
-from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.llm import model
 from app.agent.prompts import main_agent_content
@@ -30,23 +29,43 @@ from app.tools.markdown_tools import generate_markdown
 from app.tools.pdf_tools import convert_md_to_pdf
 from app.tools.upload_file_read_tool import read_file_content
 
-# 主智能体是调度中心：
-# 1. tools 只放最终交付相关的文件工具
-# 2. subagents 放网络、数据库、RAGFlow 三类信息获取助手
-# 3. checkpointer 通过 thread_id 保存同一会话中的执行上下文
-main_agent = create_deep_agent(
-    model=model,
-    system_prompt=main_agent_content["system_prompt"],
-    tools=[generate_markdown, convert_md_to_pdf, read_file_content],
-    checkpointer=InMemorySaver(),
-    subagents=[database_query_agent, network_search_agent, knowledge_base_agent],
-)
+# 主智能体实例在 FastAPI 生命周期中由 init_main_agent() 初始化
+# 使用 SqliteSaver（或其他注入的 checkpointer）替代原先硬编码的 InMemorySaver
+_main_agent = None
+
+
+def init_main_agent(checkpointer):
+    """
+    使用指定的 checkpointer 初始化主智能体
+
+    在 FastAPI lifespan 启动阶段调用，注入 AsyncSqliteSaver / InMemorySaver 等实例。
+    原先 InMemorySaver() 硬编码已被移除，checkpointer 由上层生命周期管理。
+    """
+    global _main_agent
+    _main_agent = create_deep_agent(
+        model=model,
+        system_prompt=main_agent_content["system_prompt"],
+        tools=[generate_markdown, convert_md_to_pdf, read_file_content],
+        checkpointer=checkpointer,
+        subagents=[database_query_agent, network_search_agent, knowledge_base_agent],
+    )
+    print("[MainAgent] Agent initialized with injected checkpointer")
+
+
+def get_main_agent():
+    """获取当前主智能体实例"""
+    if _main_agent is None:
+        raise RuntimeError(
+            "MainAgent not initialized. "
+            "Ensure init_main_agent() was called during FastAPI lifespan startup."
+        )
+    return _main_agent
 
 # 当前文件位于 app/agent/main_agent.py，parents[1] 即 app 目录
 project_root_path = Path(__file__).parents[1].resolve()
 
 
-async def run_deep_agent(task_query, session_id):
+async def run_deep_agent(task_query, session_id, resume=False):
     """
     异步流式执行主智能体
 
@@ -54,8 +73,9 @@ async def run_deep_agent(task_query, session_id):
     复制上传文件、写入 ContextVar，并在流式执行过程中把关键事件上报给前端。
     :param task_query: 前端提交的原始任务问题
     :param session_id: 当前任务 ID，同时用于 thread_id、输出目录和 WebSocket 定向推送
+    :param resume: 是否为恢复执行；True 时跳过路径指令注入，传入 None 从检查点恢复
     """
-    print(f"[MainAgent] 开始执行会话，session_id={session_id}")
+    print(f"[MainAgent] 开始执行会话，session_id={session_id}, resume={resume}")
 
     # 每个会话独立使用 output/session_{session_id}，避免不同用户的产物互相覆盖
     session_dir = project_root_path / "output" / f"session_{session_id}"
@@ -63,9 +83,7 @@ async def run_deep_agent(task_query, session_id):
 
     # 前端和工具使用绝对路径；提示词里只给模型相对路径，降低模型误用系统绝对路径的概率
     session_dir_str = str(session_dir).replace("\\", "/")
-    relative_session_dir_str = str(session_dir.relative_to(project_root_path)).replace(
-        "\\", "/"
-    )
+    relative_session_dir_str = str(session_dir.relative_to(project_root_path)).replace("\\", "/")
 
     # 上传文件先落在 updated/session_{session_id}，执行前复制到本次 output 工作目录
     # 这样读文件工具和生成文件工具都只需要围绕同一个 session_dir 工作
@@ -81,7 +99,7 @@ async def run_deep_agent(task_query, session_id):
             # 把上传文件列表注入用户消息，提醒模型先调用 read_file_content 获取附件内容
             updated_info_prompt = (
                 "\n    [已上传文件] 已加载到工作目录:\n"
-                + "\n".join([f"    - {f}" for f in files])
+                + "\n".join([f"- {f}" for f in files])
                 + "\n    请优先使用工具（read_file_content）读取并参考这些文件。"
             )
 
@@ -96,7 +114,11 @@ async def run_deep_agent(task_query, session_id):
     config = {"configurable": {"thread_id": session_id}}
 
     # 工作环境指令是运行时动态补充的，约束模型只在当前会话目录读写文件
-    path_instruction = f"""
+    # 恢复执行时跳过指令注入，因为上一次执行时已经注入了相同的指令
+    if resume:
+        path_instruction = ""
+    else:
+        path_instruction = f"""
     【工作环境指令】
     工作目录: {relative_session_dir_str}
     {updated_info_prompt}
@@ -109,13 +131,21 @@ async def run_deep_agent(task_query, session_id):
     """
 
     try:
+        # 恢复执行时传入 None 让 LangGraph 从最后一个 checkpoint 自动恢复
+        # 正常执行时传入完整消息
+        if resume:
+            stream_input = None
+        else:
+            stream_input = {
+                "messages": [{"role": "user", "content": task_query + path_instruction}]
+            }
+
         # astream 会持续产出模型节点、工具节点和子智能体节点的状态片段
-        async for chunk in main_agent.astream(
-            {"messages": [{"role": "user", "content": task_query + path_instruction}]},
-            config=config
-            # subgraphs=True      # 如果希望把子智能体内部执行过程也拿出来，就要注意开启子图流式输出
+        async for chunk in get_main_agent().astream(
+            stream_input,
+            config=config,
         ):
-            # chunk 形如 {"model": {"messages": [...]}}，这里主要关心模型最新消息
+            # chunk 形如 {“model”: {“messages”: [...]}}，这里主要关心模型最新消息
             for node_name, state in chunk.items():
                 if not state or "messages" not in state:
                     continue
@@ -127,23 +157,13 @@ async def run_deep_agent(task_query, session_id):
                             # DeepAgents 调用子智能体时，本质上会产生名为 task 的工具调用
                             for tool_call in last_msg.tool_calls:
                                 if tool_call["name"] == "task":
-                                    # 子智能体调用单独上报，前端可以展示“正在调用哪个专家助手”
+                                    # 子智能体调用单独上报，前端可以展示”正在调用哪个专家助手”
                                     monitor.report_assistant(
                                         tool_call["args"]["subagent_type"],
                                         {
-                                            "description": tool_call["args"][
-                                                "description"
-                                            ]
+                                            "description": tool_call["args"]["description"]
                                         },
                                     )
-                                # elif tool_call["name"] == "write_file_content":
-                                #     monitor.report_tool(
-                                #         "write_file",
-                                #         {
-                                #             "filename": tool_call["args"]["filename"],
-                                #             "content": tool_call["args"]["content"],
-                                #         },
-                                #     )
                         elif last_msg.content:
                             # 模型没有继续调用工具时，最新文本内容就是本轮可反馈给前端的结果
                             print(
