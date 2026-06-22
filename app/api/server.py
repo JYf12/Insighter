@@ -132,15 +132,16 @@ def _forget_task(thread_id: str, task: asyncio.Task) -> None:
         active_tasks.pop(thread_id, None)
 
 
-async def _run_task_with_lifecycle(query: str, thread_id: str, task_store: TaskStore):
+async def _run_task_with_lifecycle(query: str, thread_id: str, task_store: TaskStore, resume: bool = False):
     """
     带 Redis 状态跟踪的任务执行包装器。
 
     执行前标记 running，执行后根据结果标记 completed / failed / cancelled。
+    :param resume: 是否从检查点恢复执行（中断的任务）
     """
     try:
         await task_store.mark_running(thread_id)
-        await run_deep_agent(query, thread_id)
+        await run_deep_agent(query, thread_id, resume=resume)
         await task_store.mark_completed(thread_id)
     except asyncio.CancelledError:
         await task_store.mark_cancelled(thread_id)
@@ -166,7 +167,7 @@ async def _recover_tasks(task_store: TaskStore):
         print(f"[Recover] Resuming interrupted task {thread_id}: {query[:80]}")
 
         task = asyncio.create_task(
-            _run_task_with_lifecycle(query, thread_id, task_store)
+            _run_task_with_lifecycle(query, thread_id, task_store, resume=True)
         )
         active_tasks[thread_id] = task
         task.add_done_callback(
@@ -247,6 +248,7 @@ async def cancel_task(thread_id: str):
         raise HTTPException(status_code=404, detail="任务不存在或已结束")
 
     # 先发出取消信号，再短暂等待协程响应；若底层阻塞中，则返回 cancelling 给前端继续展示状态
+    # 注意：_run_task_with_lifecycle 内部会捕获 CancelledError 并自动更新 Redis 状态
     task.cancel()
     try:
         await asyncio.wait_for(task, timeout=1.0)

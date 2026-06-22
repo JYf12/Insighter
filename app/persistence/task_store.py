@@ -100,7 +100,7 @@ class TaskStore:
                 "updated_at": now,
             },
         )
-        await self._redis.sadd(self._pending_set(), thread_id)
+        await self._redis.sadd(self._pending_set(), thread_id)          # 将任务的 thread_id 添加到 Redis 的一个集合中，该集合的键由 _pending_set() 方法生成，表示所有处于 pending 状态的任务。
 
     async def mark_running(self, thread_id: str) -> None:
         """将任务从 pending 转为 running"""
@@ -113,8 +113,8 @@ class TaskStore:
                 "updated_at": now,
             },
         )
-        await self._redis.srem(self._pending_set(), thread_id)
-        await self._redis.sadd(self._running_set(), thread_id)
+        await self._redis.srem(self._pending_set(), thread_id)      # 从 pending 集合中移除该任务的 thread_id，表示它不再处于 pending 状态。
+        await self._redis.sadd(self._running_set(), thread_id)      # 将任务的 thread_id 添加到 Redis 的一个集合中，该集合的键由 _running_set() 方法生成，表示所有处于 running 状态的任务。
 
     async def mark_completed(self, thread_id: str) -> None:
         """将任务标记为 completed"""

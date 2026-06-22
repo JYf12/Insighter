@@ -66,7 +66,7 @@ project_root_path = Path(__file__).parents[1].resolve()
 
 
 async def run_deep_agent(task_query, session_id, resume=False):
-    “””
+    """
     异步流式执行主智能体
 
     API 层会为每次任务传入用户问题和 session_id。本函数负责准备会话目录、
@@ -74,23 +74,21 @@ async def run_deep_agent(task_query, session_id, resume=False):
     :param task_query: 前端提交的原始任务问题
     :param session_id: 当前任务 ID，同时用于 thread_id、输出目录和 WebSocket 定向推送
     :param resume: 是否为恢复执行；True 时跳过路径指令注入，传入 None 从检查点恢复
-    “””
-    print(f”[MainAgent] 开始执行会话，session_id={session_id}, resume={resume}”)
+    """
+    print(f"[MainAgent] 开始执行会话，session_id={session_id}, resume={resume}")
 
     # 每个会话独立使用 output/session_{session_id}，避免不同用户的产物互相覆盖
-    session_dir = project_root_path / “output” / f”session_{session_id}”
+    session_dir = project_root_path / "output" / f"session_{session_id}"
     session_dir.mkdir(parents=True, exist_ok=True)
 
     # 前端和工具使用绝对路径；提示词里只给模型相对路径，降低模型误用系统绝对路径的概率
-    session_dir_str = str(session_dir).replace(“\\”, “/”)
-    relative_session_dir_str = str(session_dir.relative_to(project_root_path)).replace(
-        “\\”, “/”
-    )
+    session_dir_str = str(session_dir).replace("\\", "/")
+    relative_session_dir_str = str(session_dir.relative_to(project_root_path)).replace("\\", "/")
 
     # 上传文件先落在 updated/session_{session_id}，执行前复制到本次 output 工作目录
     # 这样读文件工具和生成文件工具都只需要围绕同一个 session_dir 工作
-    updated_dir_path = project_root_path / “updated” / f”session_{session_id}”
-    updated_info_prompt = “”
+    updated_dir_path = project_root_path / "updated" / f"session_{session_id}"
+    updated_info_prompt = ""
     if updated_dir_path.exists():
         files = [f.name for f in updated_dir_path.iterdir() if f.is_file()]
         if files:
@@ -100,9 +98,9 @@ async def run_deep_agent(task_query, session_id, resume=False):
 
             # 把上传文件列表注入用户消息，提醒模型先调用 read_file_content 获取附件内容
             updated_info_prompt = (
-                “\n    [已上传文件] 已加载到工作目录:\n”
-                + “\n”.join([f”    - {f}” for f in files])
-                + “\n    请优先使用工具（read_file_content）读取并参考这些文件。”
+                "\n    [已上传文件] 已加载到工作目录:\n"
+                + "\n".join([f"- {f}" for f in files])
+                + "\n    请优先使用工具（read_file_content）读取并参考这些文件。"
             )
 
     # ContextVar 让深层工具无需显式传参，也能拿到当前会话目录和 WebSocket thread_id
@@ -113,14 +111,14 @@ async def run_deep_agent(task_query, session_id, resume=False):
     monitor.report_session_dir(session_dir_str)
 
     # checkpointer 依赖 thread_id 区分会话记忆；同一 session_id 会复用同一条执行上下文
-    config = {“configurable”: {“thread_id”: session_id}}
+    config = {"configurable": {"thread_id": session_id}}
 
     # 工作环境指令是运行时动态补充的，约束模型只在当前会话目录读写文件
     # 恢复执行时跳过指令注入，因为上一次执行时已经注入了相同的指令
     if resume:
-        path_instruction = “”
+        path_instruction = ""
     else:
-        path_instruction = f”””
+        path_instruction = f"""
     【工作环境指令】
     工作目录: {relative_session_dir_str}
     {updated_info_prompt}
@@ -130,7 +128,7 @@ async def run_deep_agent(task_query, session_id, resume=False):
     2. 读取已上传的文件时，请直接将文件名（例如：'开篇.txt'）作为 filename 参数传入（read_file_content）读取工具，不要带上任何目录前缀。
     3. 使用相对路径，禁止使用绝对路径
     4. 若存在上传文件，请先分析内容
-    “””
+    """
 
     try:
         # 恢复执行时传入 None 让 LangGraph 从最后一个 checkpoint 自动恢复
@@ -139,40 +137,37 @@ async def run_deep_agent(task_query, session_id, resume=False):
             stream_input = None
         else:
             stream_input = {
-                “messages”: [{“role”: “user”, “content”: task_query + path_instruction}]
+                "messages": [{"role": "user", "content": task_query + path_instruction}]
             }
 
         # astream 会持续产出模型节点、工具节点和子智能体节点的状态片段
         async for chunk in get_main_agent().astream(
             stream_input,
             config=config,
-            # subgraphs=True   # 如果希望把子智能体内部执行过程也拿出来，就要注意开启子图流式输出
         ):
             # chunk 形如 {“model”: {“messages”: [...]}}，这里主要关心模型最新消息
             for node_name, state in chunk.items():
-                if not state or “messages” not in state:
+                if not state or "messages" not in state:
                     continue
-                messages = state[“messages”]
+                messages = state["messages"]
                 if messages and isinstance(messages, list):
                     last_msg = messages[-1]
-                    if node_name == “model”:
+                    if node_name == "model":
                         if last_msg.tool_calls:
                             # DeepAgents 调用子智能体时，本质上会产生名为 task 的工具调用
                             for tool_call in last_msg.tool_calls:
-                                if tool_call[“name”] == “task”:
+                                if tool_call["name"] == "task":
                                     # 子智能体调用单独上报，前端可以展示”正在调用哪个专家助手”
                                     monitor.report_assistant(
-                                        tool_call[“args”][“subagent_type”],
+                                        tool_call["args"]["subagent_type"],
                                         {
-                                            “description”: tool_call[“args”][
-                                                “description”
-                                            ]
+                                            "description": tool_call["args"]["description"]
                                         },
                                     )
                         elif last_msg.content:
                             # 模型没有继续调用工具时，最新文本内容就是本轮可反馈给前端的结果
                             print(
-                                f”主智能体执行结果，最终结果：{last_msg.content[:100]}”
+                                f"主智能体执行结果，最终结果：{last_msg.content[:100]}"
                             )
                             monitor.report_task_result(last_msg.content)
 
@@ -181,15 +176,15 @@ async def run_deep_agent(task_query, session_id, resume=False):
         raise
     except Exception as e:
         # 异步执行异常也走 monitor，保证前端能收到明确错误事件
-        monitor._emit(“error”, f”执行主智能发生异常信息：{str(e)}”)
+        monitor._emit("error", f"执行主智能发生异常信息：{str(e)}")
     finally:
         # 任务结束后恢复 ContextVar，避免后续请求复用到本次会话目录或 thread_id
         reset_session_context(session_dir_token, session_id_token)
 
 
-if __name__ == “__main__”:
+if __name__ == "__main__":
     import asyncio
 
     asyncio.run(
-        run_deep_agent(“从网络查询机器人信息，并生成Markdown文件”, “test_session_001”)
+        run_deep_agent("从网络查询机器人信息，并生成Markdown文件", "test_session_001")
     )

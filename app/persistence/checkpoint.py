@@ -42,15 +42,17 @@ class CheckpointManager:
         db_file = Path(db_path)
         db_file.parent.mkdir(parents=True, exist_ok=True)
 
-        self._checkpointer = AsyncSqliteSaver.from_conn_string(str(db_path))
-        self._context = await self._checkpointer.__aenter__()
+        # from_conn_string 返回 async context manager，__aenter__ 才是 AsyncSqliteSaver 实例
+        ctx_mgr = AsyncSqliteSaver.from_conn_string(str(db_path))
+        self._checkpointer = await ctx_mgr.__aenter__()
+        self._context = ctx_mgr
         print(f"[Checkpoint] SQLite checkpointer opened at {db_path}")
         return self._checkpointer
 
     async def stop(self) -> None:
         """关闭 SQLite 连接"""
-        if self._checkpointer is not None and self._context is not None:
-            await self._checkpointer.__aexit__(None, None, None)
+        if self._context is not None:
+            await self._context.__aexit__(None, None, None)
             print("[Checkpoint] SQLite checkpointer closed")
             self._checkpointer = None
             self._context = None
