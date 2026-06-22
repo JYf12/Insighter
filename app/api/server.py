@@ -4,6 +4,9 @@ FastAPI 接口层与项目闭环入口
 负责承接前端的任务提交、任务取消、文件上传/下载、输出文件列表查询和
 WebSocket 长连接。HTTP 接口只做轻量调度，真正的 DeepAgents 执行放到后台
 任务中；执行进度、工具调用和最终结果由 monitor 按 thread_id 推送给前端。
+
+服务重启恢复：通过 Redis 持久化任务元数据 + SQLite 持久化 LangGraph 检查点，
+服务重启后自动扫描并恢复中断的任务。
 """
 
 import asyncio
@@ -27,8 +30,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.agent.main_agent import run_deep_agent
+from app.agent.main_agent import init_main_agent, run_deep_agent
 from app.api.monitor import manager
+from app.persistence.checkpoint import CheckpointManager
+from app.persistence.task_store import TaskStore
 
 """
 uvicorn 启动时创建一个主事件循环,多个 HTTP/WebSocket 请求通过协程（coroutine）在这个循环中交替执行,
@@ -41,13 +46,40 @@ async def lifespan(_app: FastAPI):
     """
     服务生命周期入口。
 
-    启动时绑定当前事件循环到 WebSocket 管理器，确保后台 Agent 任务可以把
-    monitor 事件投递回 FastAPI 所在的 loop。
+    启动顺序：Redis → SqliteSaver → Agent → 任务恢复
+    关闭顺序（自动逆序）：Agent → SqliteSaver.close → Redis.close
     """
     loop = asyncio.get_running_loop()
     manager.set_loop(loop)
     print(f"[Server] WebSocket Manager bound to loop: {id(loop)}")
+
+    # 1. 初始化 Redis 任务存储
+    task_store = TaskStore()
+    await task_store.start()
+    _app.state.task_store = task_store
+    print("[Server] Redis task store initialized")
+
+    # 2. 初始化 SQLite 检查点管理器
+    checkpoint_mgr = CheckpointManager()
+    await checkpoint_mgr.start()
+    _app.state.checkpoint_mgr = checkpoint_mgr
+    print("[Server] SQLite checkpoint manager started")
+
+    # 3. 初始化主智能体（注入 SqliteSaver 替代 InMemorySaver）
+    init_main_agent(checkpoint_mgr.checkpointer)
+    print("[Server] Main agent initialized with SqliteSaver")
+
+    # 4. 恢复中断的任务
+    await _recover_tasks(task_store)
+    print("[Server] Task recovery complete")
+
     yield
+
+    # ---- 关闭阶段 ----
+    print("[Server] Shutting down...")
+    await checkpoint_mgr.stop()
+    await task_store.stop()
+    print("[Server] Clean shutdown complete")
 
 
 # 当前文件位于 app/api/server.py，运行时目录统一收敛到 app 目录
@@ -57,6 +89,7 @@ project_root = current_dir.parent                       # /app
 app = FastAPI(title="DeepAgents API", lifespan=lifespan)            # 让 ConnectionManager 在服务启动阶段记住 FastAPI 当前的事件循环。
 
 # 保存 thread_id -> 后台 Agent 任务，用于同一会话任务替换和主动取消
+# 注意：此 dict 仅跟踪正在运行的 asyncio.Task；任务元数据（状态、查询等）由 Redis TaskStore 持久化
 active_tasks: dict[str, asyncio.Task] = {}
 
 # output 保存每个会话最终工作区，前端只允许从这里浏览和下载生成文件
@@ -84,6 +117,10 @@ class TaskRequest(BaseModel):
     thread_id: str = None
 
 
+# ------------------------------------------------------------------
+# 后台任务生命周期管理
+# ------------------------------------------------------------------
+
 def _forget_task(thread_id: str, task: asyncio.Task) -> None:
     """
     清理已结束任务的登记关系。
@@ -95,25 +132,102 @@ def _forget_task(thread_id: str, task: asyncio.Task) -> None:
         active_tasks.pop(thread_id, None)
 
 
+async def _run_task_with_lifecycle(query: str, thread_id: str, task_store: TaskStore):
+    """
+    带 Redis 状态跟踪的任务执行包装器。
+
+    执行前标记 running，执行后根据结果标记 completed / failed / cancelled。
+    """
+    try:
+        await task_store.mark_running(thread_id)
+        await run_deep_agent(query, thread_id)
+        await task_store.mark_completed(thread_id)
+    except asyncio.CancelledError:
+        await task_store.mark_cancelled(thread_id)
+        raise
+    except Exception:
+        await task_store.mark_failed(thread_id)
+        raise
+
+
+async def _recover_tasks(task_store: TaskStore):
+    """
+    服务启动时恢复中断的任务。
+
+    - running 状态的任务：中断于服务重启，检查点已持久化到 SQLite。
+      通过 run_deep_agent(query, thread_id, resume=True) 从检查点恢复。
+    - pending 状态的任务：从未启动，以原始 query 正常启动。
+    """
+    # 恢复 running 任务（被中断的）
+    running_ids = await task_store.get_running_thread_ids()
+    for thread_id in running_ids:
+        task_data = await task_store.get_task(thread_id)
+        query = task_data.get("query", "") if task_data else ""
+        print(f"[Recover] Resuming interrupted task {thread_id}: {query[:80]}")
+
+        task = asyncio.create_task(
+            _run_task_with_lifecycle(query, thread_id, task_store)
+        )
+        active_tasks[thread_id] = task
+        task.add_done_callback(
+            lambda finished_task, tid=thread_id: _forget_task(tid, finished_task)
+        )
+
+    if running_ids:
+        print(f"[Recover] Resumed {len(running_ids)} interrupted task(s)")
+
+    # 恢复 pending 任务（从未启动的）
+    pending_ids = await task_store.get_pending_thread_ids()
+    for thread_id in pending_ids:
+        task_data = await task_store.get_task(thread_id)
+        query = task_data.get("query", "") if task_data else ""
+        print(f"[Recover] Starting pending task {thread_id}: {query[:80]}")
+
+        task = asyncio.create_task(
+            _run_task_with_lifecycle(query, thread_id, task_store)
+        )
+        active_tasks[thread_id] = task
+        task.add_done_callback(
+            lambda finished_task, tid=thread_id: _forget_task(tid, finished_task)
+        )
+
+    if pending_ids:
+        print(f"[Recover] Started {len(pending_ids)} pending task(s)")
+
+    if not running_ids and not pending_ids:
+        print("[Recover] No tasks to recover")
+
+
+# ------------------------------------------------------------------
+# HTTP 端点
+# ------------------------------------------------------------------
+
 @app.post("/api/task")
 async def run_task(request: TaskRequest):
     """
     启动一次 DeepAgents 后台任务。
 
-    HTTP 请求只负责创建后台协程并立即返回，后续执行轨迹、子智能体调用和最终
-    答案都会由 monitor 通过 `/ws/{thread_id}` 推送给同一会话的前端。
+    将任务元数据持久化到 Redis，然后创建后台协程执行。
+    执行进度和结果由 monitor 通过 /ws/{thread_id} 推送。
     """
     thread_id = request.thread_id or str(uuid.uuid4())
+    task_store: TaskStore = app.state.task_store
 
     # 同一个 thread_id 只保留一个活跃任务，新任务会先取消旧任务，避免并发写同一会话目录
     old_task = active_tasks.get(thread_id)
     if old_task and not old_task.done():
         old_task.cancel()
 
+    # 持久化任务到 Redis
+    await task_store.create_task(thread_id, request.query)
+
     # create_task 把长耗时 Agent 执行交给事件循环，接口本身不用等待最终结果
-    task = asyncio.create_task(run_deep_agent(request.query, thread_id))
+    # 使用 _run_task_with_lifecycle 包装器自动管理 Redis 中的任务状态
+    task = asyncio.create_task(
+        _run_task_with_lifecycle(request.query, thread_id, task_store)
+    )
     active_tasks[thread_id] = task
-    task.add_done_callback(lambda finished_task: _forget_task(thread_id, finished_task))        # 任务结束回调（无论结果如何），通过 _forget_task 删除
+    task.add_done_callback(lambda finished_task: _forget_task(thread_id, finished_task))
 
     return {"status": "started", "thread_id": thread_id}
 
@@ -126,6 +240,7 @@ async def cancel_task(thread_id: str):
     注意：取消会向 asyncio.Task 注入 CancelledError。若底层第三方工具正在执行不可中断
     的同步阻塞调用，任务可能需要等该调用返回后才会真正结束。
     """
+    task_store: TaskStore = app.state.task_store
     task = active_tasks.get(thread_id)
     if not task or task.done():
         active_tasks.pop(thread_id, None)
@@ -145,7 +260,7 @@ async def cancel_task(thread_id: str):
         return {"status": "cancelled", "thread_id": thread_id, "message": str(e)}
 
     _forget_task(thread_id, task)
-    return {"status": "cancelled", "thread_id": thread_id}          # HTTP 告诉前端“取消请求已处理”，WebSocket 才告诉前端“后台任务已经真正进入取消状态”。
+    return {"status": "cancelled", "thread_id": thread_id}          # HTTP 告诉前端"取消请求已处理"，WebSocket 才告诉前端"后台任务已经真正进入取消状态"。
 
 
 @app.post("/api/upload")

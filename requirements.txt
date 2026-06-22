@@ -6,6 +6,7 @@ langchain==1.2.17           # LangChain 核心库
 langchain-core>=0.2.0       # 基础组件 (Prompt, Message, Tool)
 langchain-community>=0.2.0  # 社区工具集成
 langgraph==1.1.10           # 智能体工作流编排
+langgraph-checkpoint-sqlite>=2.0  # SQLite 检查点持久化，替代 InMemorySaver
 
 # --- 大模型服务 (LLM Services) ---
 langchain-openai==1.2.1     # OpenAI 接口适配
@@ -18,6 +19,7 @@ python-multipart>=0.0.6     # 文件上传支持
 
 # --- 数据库与存储 (Database) ---
 mysql-connector-python>=8.0.0  # MySQL 官方驱动，用于 mysql_tools
+redis>=5.0                     # Redis 客户端，用于异步任务队列持久化
 
 # --- 文件处理 (File Processing - upload_file_read_tool) ---
 python-docx>=1.0.0          # Word (.docx) 读取
