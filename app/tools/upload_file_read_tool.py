@@ -4,6 +4,9 @@
 供主智能体读取用户在当前会话中上传的临时附件。工具会先通过 ContextVar
 拿到本次 session_dir，再把模型传入的文件名解析到真实路径，支持文本、
 Word、PDF 和 Excel 等常见格式。
+
+注意：计时/埋点/指标更新已由 observability_middleware 统一接管，
+工具文件不再需要手工调用 time.perf_counter() 或 monitor.report_tool_end/failure()。
 """
 
 from pathlib import Path
@@ -13,7 +16,10 @@ from langchain_core.tools import tool
 
 from app.api.context import get_session_context
 from app.api.monitor import monitor
+from app.utils.logger import get_logger
 from app.utils.path_utils import resolve_path
+
+_logger = get_logger("upload_file_read_tool")
 
 # 文档解析依赖按需导入：缺少某类依赖时，只影响对应文件格式，不影响工具整体注册
 try:
@@ -63,55 +69,51 @@ def read_file_content(
     # 根据文件后缀选择解析方式；未知后缀会先按 UTF-8 文本兜底读取
     ext = file_path.suffix.lower()
 
-    try:
-        if ext in [".md", ".txt"]:
-            return file_path.read_text(encoding="utf-8")
+    if ext in [".md", ".txt"]:
+        result = file_path.read_text(encoding="utf-8")
 
-        elif ext == ".docx":
-            if docx is None:
-                return "错误：未安装 'python-docx' 库，无法读取 Word 文件。"
-            # python-docx 读取段落文本，适合课程中的普通 Word 附件
-            doc = docx.Document(str(file_path))
-            full_text = [para.text for para in doc.paragraphs]
-            return "\n".join(full_text)
+    elif ext == ".docx":
+        if docx is None:
+            return "错误：未安装 'python-docx' 库，无法读取 Word 文件。"
+        doc = docx.Document(str(file_path))
+        full_text = [para.text for para in doc.paragraphs]
+        result = "\n".join(full_text)
 
-        elif ext == ".pdf":
-            if pypdf is None:
-                return "错误：未安装 'pypdf' 库，无法读取 PDF 文件。"
-            # pypdf 按页提取文本，扫描件或图片型 PDF 可能无法提取有效文字
-            reader = pypdf.PdfReader(str(file_path))
-            text = "\n".join([page.extract_text() or "" for page in reader.pages])
-            return text
+    elif ext == ".pdf":
+        if pypdf is None:
+            return "错误：未安装 'pypdf' 库，无法读取 PDF 文件。"
+        reader = pypdf.PdfReader(str(file_path))
+        text = "\n".join([page.extract_text() or "" for page in reader.pages])
+        result = text
 
-        elif ext in [".xlsx", ".xls"]:
-            if pd is None:
-                return "错误：未安装 'pandas' 库，无法读取 Excel 文件。"
+    elif ext in [".xlsx", ".xls"]:
+        if pd is None:
+            return "错误：未安装 'pandas' 库，无法读取 Excel 文件。"
 
-            try:
-                df = pd.read_excel(str(file_path))
-            except Exception as e:
-                return f"读取 Excel 失败: {str(e)}"
+        try:
+            df = pd.read_excel(str(file_path))
+        except Exception as e:
+            return f"读取 Excel 失败: {str(e)}"
 
-            # Excel 不直接返回全量数据，先给模型列名、预览和统计摘要，避免上下文过长
-            result = [
-                f"文件: {filename}",
-                f"行数: {len(df)}, 列数: {len(df.columns)}",
-                f"列名: {', '.join(df.columns.astype(str))}",
-                "\n[前5行数据预览]:",
-                df.head().to_string(index=False),
-                "\n[统计描述]:",
-                df.describe().to_string(),
-            ]
-            return "\n".join(result)
+        result_lines = [
+            f"文件: {filename}",
+            f"行数: {len(df)}, 列数: {len(df.columns)}",
+            f"列名: {', '.join(df.columns.astype(str))}",
+            "\n[前5行数据预览]:",
+            df.head().to_string(index=False),
+            "\n[统计描述]:",
+            df.describe().to_string(),
+        ]
+        result = "\n".join(result_lines)
 
-        else:
-            try:
-                return file_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                return f"错误：不支持的文件格式 '{ext}'，且无法作为文本读取。"
+    else:
+        try:
+            result = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return f"错误：不支持的文件格式 '{ext}'，且无法作为文本读取。"
 
-    except Exception as e:
-        return f"读取文件出错: {str(e)}"
+    _logger.info("文件读取完成", extra={"filename": filename, "ext": ext})
+    return result
 
 
 if __name__ == "__main__":

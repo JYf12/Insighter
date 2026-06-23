@@ -3,6 +3,9 @@ Tavily 网络搜索工具模块
 
 封装 internet_search 工具，供网络搜索子智能体检索互联网公开信息
 工具内部会先通过 monitor 上报调用参数，再请求 Tavily API 返回结构化搜索结果
+
+注意：计时/埋点/指标更新已由 observability_middleware 统一接管，
+工具文件不需要再手工调用 time.perf_counter() 或 monitor.report_tool_end/failure()。
 """
 
 import os
@@ -13,8 +16,11 @@ from langchain_core.tools import tool
 from tavily import TavilyClient
 
 from app.api.monitor import monitor
+from app.utils.logger import get_logger
 
 load_dotenv()
+
+_logger = get_logger("tavily_tool")
 
 
 # TavilyClient 是实际访问搜索服务的客户端；模块级复用可避免每次工具调用重复初始化
@@ -39,8 +45,7 @@ def internet_search(
     :param include_raw_content: 是否返回网页原文内容；False 返回摘要，True 尝试返回更完整正文
     :return: Tavily 返回的结构化搜索结果
     """
-    # 工具内部埋点比外层 stream 解析更直接：只要工具被调用，前端就能看到本次搜索参数
-    # 这里只上报查询参数，不上报搜索结果正文，避免监控事件体过大
+    # 埋点：工具一被调用，前端就能看到本次搜索参数（中间件接管计时和 end/failure 事件）
     monitor.report_tool(
         tool_name="网络搜索工具",
         args={

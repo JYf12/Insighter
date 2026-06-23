@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 import redis.asyncio as redis
 from dotenv import find_dotenv, load_dotenv
 
+from app.utils.logger import get_logger
+
 load_dotenv(find_dotenv())
+
+_logger = get_logger("task_store")
 
 # Redis Key 命名空间前缀，避免和同一 Redis 实例中的其他应用 key 冲突
 KEY_PREFIX = "insighter"
@@ -61,13 +65,13 @@ class TaskStore:
             decode_responses=True,
         )
         await self._redis.ping()
-        print(f"[TaskStore] Redis connected at {host}:{port}")
+        _logger.info("Redis connected", extra={"host": host, "port": port})
 
     async def stop(self) -> None:
         """关闭 Redis 连接"""
         if self._redis:
             await self._redis.aclose()
-            print("[TaskStore] Redis connection closed")
+            _logger.info("Redis connection closed")
             self._redis = None
 
     # ------------------------------------------------------------------

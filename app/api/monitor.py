@@ -13,6 +13,10 @@ from typing import Any, Optional
 from fastapi import WebSocket
 
 from app.api.context import get_thread_context
+from app.api.metrics import metrics_collector
+from app.utils.logger import get_logger
+
+_logger = get_logger("monitor")
 
 
 class ToolMonitor:
@@ -64,8 +68,9 @@ class ToolMonitor:
 
                 if manager_loop and thread_id:
                     self._send_to_websocket(payload, thread_id, manager_loop)
+                    metrics_collector.record_ws_message_sent()                          # 统计 WebSocket 消息发送次数（加一）
             except Exception as e:
-                print(f"[Monitor] WebSocket send failed: {e}")
+                _logger.warning(f"WebSocket send failed: {e}", extra={"error": str(e)})
 
         # DeepAgents 脚本调试时，如果运行时暴露了 stream_writer，也同步写入流式输出
         if hasattr(builtins, "runtime") and hasattr(builtins.runtime, "stream_writer"):
@@ -74,8 +79,8 @@ class ToolMonitor:
             except Exception:
                 pass
 
-        # 控制台保底输出，便于无前端场景下观察执行过程
-        print(f"\n[Monitor:{event_type}] {message}")
+        # 结构化日志输出，替代原先的 print()
+        _logger.info(message, extra={"event_type": event_type, "data": data or {}})
 
     def _send_to_websocket(
         self,
@@ -118,6 +123,35 @@ class ToolMonitor:
             {"tool_name": tool_name, "args": args},
         )
 
+    def report_tool_end(
+        self,
+        tool_name: str,
+        duration_ms: float,
+        result_summary: Optional[str] = None,
+    ) -> None:
+        """报告工具执行结束"""
+        data: dict[str, Any] = {"tool_name": tool_name, "duration_ms": duration_ms}
+        if result_summary is not None:
+            data["result_summary"] = result_summary
+        self._emit(
+            "tool_end",
+            f"工具执行完成: {tool_name} ({duration_ms:.0f}ms)",
+            data,
+        )
+
+    def report_tool_failure(
+        self,
+        tool_name: str,
+        duration_ms: float,
+        error: str,
+    ) -> None:
+        """报告工具执行失败"""
+        self._emit(
+            "tool_failure",
+            f"工具执行失败: {tool_name} ({duration_ms:.0f}ms)",
+            {"tool_name": tool_name, "duration_ms": duration_ms, "error": error},
+        )
+
     def report_assistant(
         self,
         assistant_name: str,
@@ -128,6 +162,37 @@ class ToolMonitor:
             "assistant_call",
             f"正在调用助手: {assistant_name}",
             {"assistant_name": assistant_name, "args": args},
+        )
+
+    def report_assistant_end(
+        self,
+        assistant_name: str,
+        duration_ms: float,
+    ) -> None:
+        """报告子智能体执行结束"""
+        self._emit(
+            "subagent_end",
+            f"助手执行完成: {assistant_name} ({duration_ms:.0f}ms)",
+            {"assistant_name": assistant_name, "duration_ms": duration_ms},
+        )
+
+    def report_token_usage(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+    ) -> None:
+        """报告模型 Token 消耗"""
+        self._emit(
+            "token_usage",
+            f"Token 消耗: {model} prompt={prompt_tokens} completion={completion_tokens} total={total_tokens}",
+            {
+                "model": model,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            },
         )
 
     def report_task_result(self, result: str) -> None:
@@ -162,21 +227,21 @@ class ConnectionManager:
         """绑定 FastAPI 主事件循环，并同步注册到 monitor"""
         self.loop = loop
         monitor.set_websocket_manager(self)
-        print(f"[Monitor] ConnectionManager manually bound to loop: {id(self.loop)}")
+        _logger.info("ConnectionManager bound to loop", extra={"loop_id": id(self.loop)})
 
     async def connect(self, websocket: WebSocket, thread_id: str) -> None:
         """接受 WebSocket 连接，并按 thread_id 保存"""
         await websocket.accept()
         self.active_connections[thread_id] = websocket
-        print(f"Client connected: {thread_id}")
+        _logger.info("Client connected", extra={"thread_id": thread_id})
 
     def disconnect(self, websocket: WebSocket, thread_id: str) -> None:
         """移除已经断开的 WebSocket 连接"""
         if self.active_connections.get(thread_id) is websocket:
             del self.active_connections[thread_id]
-            print(f"Client disconnected: {thread_id}")
+            _logger.info("Client disconnected", extra={"thread_id": thread_id})
         else:
-            print(f"Stale websocket disconnected, current connection kept: {thread_id}")
+            _logger.info("Stale websocket disconnected, current connection kept", extra={"thread_id": thread_id})
 
     async def send_personal_message(self, message: str, websocket: WebSocket) -> None:
         """向指定 WebSocket 发送纯文本消息"""

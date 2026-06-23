@@ -8,11 +8,13 @@ session_id 创建独立工作目录，并把工具调用、子智能体调用和
 
 import asyncio
 import shutil
+import time
 from pathlib import Path
 
 from deepagents import create_deep_agent
 
 from app.agent.llm import model
+from app.agent.observability_middleware import observability_middleware
 from app.agent.prompts import main_agent_content
 from app.agent.subagents.database_query_agent import database_query_agent
 from app.agent.subagents.knowledge_base_agent import knowledge_base_agent
@@ -23,11 +25,14 @@ from app.api.context import (
     set_thread_context,
 )
 from app.api.monitor import monitor
+from app.utils.logger import get_logger
 
 # 文件类工具由主智能体直接掌握，负责读取上传附件和生成最终交付文档
 from app.tools.markdown_tools import generate_markdown
 from app.tools.pdf_tools import convert_md_to_pdf
 from app.tools.upload_file_read_tool import read_file_content
+
+_logger = get_logger("main_agent")
 
 # 主智能体实例在 FastAPI 生命周期中由 init_main_agent() 初始化
 # 使用 SqliteSaver（或其他注入的 checkpointer）替代原先硬编码的 InMemorySaver
@@ -48,8 +53,9 @@ def init_main_agent(checkpointer):
         tools=[generate_markdown, convert_md_to_pdf, read_file_content],
         checkpointer=checkpointer,
         subagents=[database_query_agent, network_search_agent, knowledge_base_agent],
+        middleware=[observability_middleware],
     )
-    print("[MainAgent] Agent initialized with injected checkpointer")
+    _logger.info("Agent initialized with injected checkpointer and observability middleware")
 
 
 def get_main_agent():
@@ -75,7 +81,10 @@ async def run_deep_agent(task_query, session_id, resume=False):
     :param session_id: 当前任务 ID，同时用于 thread_id、输出目录和 WebSocket 定向推送
     :param resume: 是否为恢复执行；True 时跳过路径指令注入，传入 None 从检查点恢复
     """
-    print(f"[MainAgent] 开始执行会话，session_id={session_id}, resume={resume}")
+    _logger.info(
+        "开始执行会话",
+        extra={"session_id": session_id, "resume": resume},
+    )
 
     # 每个会话独立使用 output/session_{session_id}，避免不同用户的产物互相覆盖
     session_dir = project_root_path / "output" / f"session_{session_id}"
@@ -130,6 +139,9 @@ async def run_deep_agent(task_query, session_id, resume=False):
     4. 若存在上传文件，请先分析内容
     """
 
+    # 追踪子智能体调用的起始时间，用于在 model node 检测完成后上报 subagent_end
+    _assistant_start_times: dict[str, float] = {}
+
     try:
         # 恢复执行时传入 None 让 LangGraph 从最后一个 checkpoint 自动恢复
         # 正常执行时传入完整消息
@@ -157,25 +169,40 @@ async def run_deep_agent(task_query, session_id, resume=False):
                             # DeepAgents 调用子智能体时，本质上会产生名为 task 的工具调用
                             for tool_call in last_msg.tool_calls:
                                 if tool_call["name"] == "task":
-                                    # 子智能体调用单独上报，前端可以展示”正在调用哪个专家助手”
+                                    # 子智能体调用单独上报，前端可以展示"正在调用哪个专家助手"
+                                    subagent_type = tool_call["args"]["subagent_type"]
                                     monitor.report_assistant(
-                                        tool_call["args"]["subagent_type"],
+                                        subagent_type,
                                         {
                                             "description": tool_call["args"]["description"]
                                         },
                                     )
+                                    _assistant_start_times[subagent_type] = time.perf_counter()     # 记录当前时间戳
+                                else:
+                                    # 非 task 的工具调用，由中间件（Phase 3）或工具层处理
+                                    pass
                         elif last_msg.content:
+                            # 当 model node 产出最终回复时，检查是否有子智能体刚完成
+                            # 子智能体的 tool result 通常在上一个 chunk 中返回
+                            if _assistant_start_times:
+                                for assistant_name, start_time in list(_assistant_start_times.items()):
+                                    duration_ms = (time.perf_counter() - start_time) * 1000
+                                    monitor.report_assistant_end(assistant_name, duration_ms)  # 保留子智能体调用成功上报
+                                    del _assistant_start_times[assistant_name]
+
                             # 模型没有继续调用工具时，最新文本内容就是本轮可反馈给前端的结果
-                            print(
-                                f"主智能体执行结果，最终结果：{last_msg.content[:100]}"
+                            _logger.info(
+                                f"主智能体本轮结果: {str(last_msg.content)[:100]}"
                             )
-                            monitor.report_task_result(last_msg.content)
+                            monitor.report_task_result(last_msg.content)                        # 上报最终任务完成进度
+
 
     except asyncio.CancelledError:
         monitor.report_task_cancelled()
         raise
     except Exception as e:
         # 异步执行异常也走 monitor，保证前端能收到明确错误事件
+        _logger.error(f"执行主智能发生异常", extra={"error": str(e)})
         monitor._emit("error", f"执行主智能发生异常信息：{str(e)}")
     finally:
         # 任务结束后恢复 ContextVar，避免后续请求复用到本次会话目录或 thread_id

@@ -12,7 +12,11 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from app.utils.logger import get_logger
+
 load_dotenv(find_dotenv())
+
+_logger = get_logger("checkpoint")
 
 
 class CheckpointManager:
@@ -46,13 +50,13 @@ class CheckpointManager:
         ctx_mgr = AsyncSqliteSaver.from_conn_string(str(db_path))
         self._checkpointer = await ctx_mgr.__aenter__()
         self._context = ctx_mgr
-        print(f"[Checkpoint] SQLite checkpointer opened at {db_path}")
+        _logger.info("SQLite checkpointer opened", extra={"db_path": db_path})
         return self._checkpointer
 
     async def stop(self) -> None:
         """关闭 SQLite 连接"""
         if self._context is not None:
             await self._context.__aexit__(None, None, None)
-            print("[Checkpoint] SQLite checkpointer closed")
+            _logger.info("SQLite checkpointer closed")
             self._checkpointer = None
             self._context = None

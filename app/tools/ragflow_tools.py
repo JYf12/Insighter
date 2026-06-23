@@ -4,6 +4,9 @@ RAGFlow 知识库工具模块
 封装两个给 RAGFlow 子智能体使用的 LangChain 工具：
 get_assistant_list 用于发现可用聊天助手及其绑定知识库，
 create_ask_delete 用于创建临时会话、发起一次问题查询，并在查询后删除会话。
+
+注意：计时/埋点/指标更新已由 observability_middleware 统一接管，
+工具文件不再需要手工调用 time.perf_counter() 或 monitor.report_tool_end/failure()。
 """
 
 import json
@@ -25,7 +28,7 @@ def get_assistant_list() -> str:
     """
     查询 RAGFlow 中有哪些聊天助手，以及每个助手关联了哪些知识库
 
-    作用：让模型先了解“哪个助手能回答哪类内部文档问题”，再决定后续要向哪个助手提问。
+    作用：让模型先了解"哪个助手能回答哪类内部文档问题"，再决定后续要向哪个助手提问。
     调用 create_ask_delete 之前，应先调用本工具确认助手名称。
     :return: 有助手时返回助手名称、功能介绍、关联知识库；无助手或异常时返回中文提示
     """
@@ -101,7 +104,7 @@ def create_ask_delete(chat_name, question) -> str:
                 continue
             answer = chunk_data.get("answer")
             if answer:
-                # 部分流式片段会返回“截至当前的完整答案”，部分会返回增量内容
+                # 部分流式片段会返回"截至当前的完整答案"，部分会返回增量内容
                 # 这里兼容两种情况，尽量避免重复拼接
                 if answer.startswith(result):
                     result = answer

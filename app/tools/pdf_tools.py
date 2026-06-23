@@ -3,6 +3,9 @@ Markdown 转 PDF 工具
 
 供主智能体把已经生成的 Markdown 文档转换为 PDF。Tool 层只负责解析当前
 会话目录中的输入/输出路径，真正的版式转换交给 app.utils.word_converter。
+
+注意：计时/埋点/指标更新已由 observability_middleware 统一接管，
+工具文件不再需要手工调用 time.perf_counter() 或 monitor.report_tool_end/failure()。
 """
 
 import logging
@@ -17,8 +20,11 @@ from langchain_core.tools import tool
 
 from app.api.context import get_session_context
 from app.api.monitor import monitor
+from app.utils.logger import get_logger
 from app.utils.path_utils import resolve_path
 from app.utils.word_converter import convert_md_to_pdf as convert_md_to_pdf_via_word
+
+_logger = get_logger("pdf_tool")
 
 
 @tool
@@ -54,9 +60,14 @@ def convert_md_to_pdf(
             pdf_abs_path = md_abs_path.with_suffix(".pdf")
 
         # PDF 版式、中文字体和 Markdown 解析细节都封装在底层转换模块中
-        return convert_md_to_pdf_via_word(md_abs_path, pdf_abs_path)
+        result = convert_md_to_pdf_via_word(md_abs_path, pdf_abs_path)
+        _logger.info("PDF 转换完成", extra={
+            "md_path": str(md_abs_path), "pdf_path": str(pdf_abs_path),
+        })
+        return result
 
     except Exception as e:
+        _logger.error("转换失败", extra={"error": str(e)})
         logging.error(f"转换失败: {e}", exc_info=True)
         return f"转换失败: {str(e)}"
 
@@ -92,7 +103,7 @@ if __name__ == "__main__":
 
 ## 四、行动建议
 
-围绕“增长、转化、风控、合规”四个关键词设计分析框架，并将公开信息、数据库数据和 RAGFlow 知识库材料统一整理成可交付报告。
+围绕"增长、转化、风控、合规"四个关键词设计分析框架，并将公开信息、数据库数据和 RAGFlow 知识库材料统一整理成可交付报告。
 """,
         encoding="utf-8",
     )
