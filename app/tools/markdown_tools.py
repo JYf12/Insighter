@@ -3,6 +3,9 @@ Markdown 文件生成工具
 
 供主智能体把最终整理后的内容写入当前会话工作目录。工具会把模型传入的
 filename/path 交给 resolve_path 统一解析，避免模型直接操作真实绝对路径。
+
+注意：计时/埋点/指标更新已由 observability_middleware 统一接管，
+工具文件不再需要手工调用 time.perf_counter() 或 monitor.report_tool_end/failure()。
 """
 
 from pathlib import Path
@@ -15,7 +18,10 @@ from langchain_core.tools import tool
 
 from app.api.context import get_session_context
 from app.api.monitor import monitor
+from app.utils.logger import get_logger
 from app.utils.path_utils import resolve_path
+
+_logger = get_logger("markdown_tool")
 
 
 @tool
@@ -32,14 +38,14 @@ def generate_markdown(
     :param path: 可选保存路径；通常由运行时工作目录指令约束为相对路径
     :return: 文件生成结果说明
     """
-    print(f"[MarkdownTool] 输入保存路径: {path or '当前会话目录'}")
-    monitor.report_tool("Markdown文档生成工具", {"写入的文本内容": content})
+    _logger.debug("输入保存路径", extra={"path": path or "当前会话目录"})
+    monitor.report_tool("Markdown文档生成工具", {"写入的文本内容": content[:max(0, 200)]})
     if not filename.endswith(".md"):
         filename += ".md"
 
     # session_dir 由 run_deep_agent 写入 ContextVar，保证文件写入当前会话工作目录
     session_dir = get_session_context()
-    print(f"[MarkdownTool] 当前会话目录: {session_dir}")
+    _logger.debug("当前会话目录", extra={"session_dir": session_dir})
 
     # 先把模型传入的 path/filename 合成一个逻辑路径，再交给 resolve_path 做统一清洗
     if path and path != ".":
@@ -51,23 +57,19 @@ def generate_markdown(
 
     parent_dir = file_path.parent
 
-    print(
-        f"[MarkdownTool] Debug: parent_dir={parent_dir}, filename={filename}, full_path={file_path}"
-    )
+    _logger.debug("Markdown 路径解析", extra={
+        "parent_dir": str(parent_dir), "filename": filename, "full_path": str(file_path),
+    })
 
-    try:
-        # 允许模型指定 session_dir 下的子目录；不存在时自动创建
-        if not parent_dir.exists():
-            parent_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[MarkdownTool] 已创建目录: {parent_dir}")
+    # 允许模型指定 session_dir 下的子目录；不存在时自动创建
+    if not parent_dir.exists():
+        parent_dir.mkdir(parents=True, exist_ok=True)
+        _logger.debug("已创建目录", extra={"dir": str(parent_dir)})
 
-        file_path.write_text(content, encoding="utf-8")
+    file_path.write_text(content, encoding="utf-8")
 
-        print(f"[MarkdownTool] 文件写入完成: {file_path}")
-        return f"Markdown文件 '{file_path}' 已成功生成并保存。"
-    except Exception as e:
-        print(f"[MarkdownTool] 文件写入失败: {e}")
-        return f"生成Markdown文件失败: {str(e)}"
+    _logger.info("文件写入完成", extra={"file_path": str(file_path)})
+    return f"Markdown文件 '{file_path}' 已成功生成并保存。"
 
 
 if __name__ == "__main__":

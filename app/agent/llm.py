@@ -18,3 +18,10 @@ model = init_chat_model(
     model=os.getenv("LLM_MODEL_ID"),
     model_provider="openai",
 )
+
+# 挂载 Token 追踪器，利用 LangChain Callback 的层级传播机制
+# 自动捕获主智能体和所有子智能体的 token 消耗
+from app.agent.token_tracker import LangChainTokenTracker
+
+_token_tracker = LangChainTokenTracker()
+model.callbacks = [_token_tracker]

@@ -10,6 +10,7 @@ WebSocket 长连接。HTTP 接口只做轻量调度，真正的 DeepAgents 执�
 """
 
 import asyncio
+import datetime
 import shutil
 import uuid
 from contextlib import asynccontextmanager
@@ -31,9 +32,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.agent.main_agent import init_main_agent, run_deep_agent
+from app.api.metrics import metrics_collector
 from app.api.monitor import manager
 from app.persistence.checkpoint import CheckpointManager
 from app.persistence.task_store import TaskStore
+from app.utils.logger import get_logger
+
+_logger = get_logger("server")
 
 """
 uvicorn 启动时创建一个主事件循环,多个 HTTP/WebSocket 请求通过协程（coroutine）在这个循环中交替执行,
@@ -51,35 +56,35 @@ async def lifespan(_app: FastAPI):
     """
     loop = asyncio.get_running_loop()
     manager.set_loop(loop)
-    print(f"[Server] WebSocket Manager bound to loop: {id(loop)}")
+    _logger.info("WebSocket Manager bound to loop", extra={"loop_id": id(loop)})
 
     # 1. 初始化 Redis 任务存储
     task_store = TaskStore()
     await task_store.start()
     _app.state.task_store = task_store
-    print("[Server] Redis task store initialized")
+    _logger.info("Redis task store initialized")
 
     # 2. 初始化 SQLite 检查点管理器
     checkpoint_mgr = CheckpointManager()
     await checkpoint_mgr.start()
     _app.state.checkpoint_mgr = checkpoint_mgr
-    print("[Server] SQLite checkpoint manager started")
+    _logger.info("SQLite checkpoint manager started")
 
     # 3. 初始化主智能体（注入 SqliteSaver 替代 InMemorySaver）
     init_main_agent(checkpoint_mgr.checkpointer)
-    print("[Server] Main agent initialized with SqliteSaver")
+    _logger.info("Main agent initialized with SqliteSaver")
 
     # 4. 恢复中断的任务
     await _recover_tasks(task_store)
-    print("[Server] Task recovery complete")
+    _logger.info("Task recovery complete")
 
     yield
 
     # ---- 关闭阶段 ----
-    print("[Server] Shutting down...")
+    _logger.info("Shutting down...")
     await checkpoint_mgr.stop()
     await task_store.stop()
-    print("[Server] Clean shutdown complete")
+    _logger.info("Clean shutdown complete")
 
 
 # 当前文件位于 app/api/server.py，运行时目录统一收敛到 app 目录
@@ -143,11 +148,14 @@ async def _run_task_with_lifecycle(query: str, thread_id: str, task_store: TaskS
         await task_store.mark_running(thread_id)
         await run_deep_agent(query, thread_id, resume=resume)
         await task_store.mark_completed(thread_id)
+        metrics_collector.record_task_completed()                   # 统计任务完成（加一）
     except asyncio.CancelledError:
         await task_store.mark_cancelled(thread_id)
+        metrics_collector.record_task_cancelled()                   # 统计任务取消（加一）
         raise
     except Exception:
         await task_store.mark_failed(thread_id)
+        metrics_collector.record_task_failed()                      # 统计任务失败（加一）
         raise
 
 
@@ -164,8 +172,9 @@ async def _recover_tasks(task_store: TaskStore):
     for thread_id in running_ids:
         task_data = await task_store.get_task(thread_id)
         query = task_data.get("query", "") if task_data else ""
-        print(f"[Recover] Resuming interrupted task {thread_id}: {query[:80]}")
+        _logger.info("Resuming interrupted task", extra={"thread_id": thread_id, "query": query[:80]})
 
+        metrics_collector.record_task_started()                                     # 统计任务启动（加一）
         task = asyncio.create_task(
             _run_task_with_lifecycle(query, thread_id, task_store, resume=True)
         )
@@ -175,15 +184,16 @@ async def _recover_tasks(task_store: TaskStore):
         )
 
     if running_ids:
-        print(f"[Recover] Resumed {len(running_ids)} interrupted task(s)")
+        _logger.info("Resumed interrupted tasks", extra={"count": len(running_ids)})
 
     # 恢复 pending 任务（从未启动的）
     pending_ids = await task_store.get_pending_thread_ids()
     for thread_id in pending_ids:
         task_data = await task_store.get_task(thread_id)
         query = task_data.get("query", "") if task_data else ""
-        print(f"[Recover] Starting pending task {thread_id}: {query[:80]}")
+        _logger.info("Starting pending task", extra={"thread_id": thread_id, "query": query[:80]})
 
+        metrics_collector.record_task_started()                                     # 统计任务启动（加一）
         task = asyncio.create_task(
             _run_task_with_lifecycle(query, thread_id, task_store)
         )
@@ -193,10 +203,10 @@ async def _recover_tasks(task_store: TaskStore):
         )
 
     if pending_ids:
-        print(f"[Recover] Started {len(pending_ids)} pending task(s)")
+        _logger.info("Started pending tasks", extra={"count": len(pending_ids)})
 
     if not running_ids and not pending_ids:
-        print("[Recover] No tasks to recover")
+        _logger.info("No tasks to recover")
 
 
 # ------------------------------------------------------------------
@@ -221,6 +231,9 @@ async def run_task(request: TaskRequest):
 
     # 持久化任务到 Redis
     await task_store.create_task(thread_id, request.query)
+
+    # 指标：记录任务启动
+    metrics_collector.record_task_started()                                     # 统计任务启动（加一）
 
     # create_task 把长耗时 Agent 执行交给事件循环，接口本身不用等待最终结果
     # 使用 _run_task_with_lifecycle 包装器自动管理 Redis 中的任务状态
@@ -336,7 +349,7 @@ async def list_files(path: str):
     Args:
         path (str): 目标目录的绝对路径 (必须在 output 目录下)。
     """
-    print(f"[DEBUG] 请求文件列表: {path}")                # 前端通常是在收到 session_created 事件后，拿到当前会话的 output/session_xxx 路径，再请求列举文件
+    _logger.debug("请求文件列表", extra={"path": path})
 
     try:
         # 和下载接口保持同一条安全边界：前端只能查看 output 目录内部内容
@@ -344,11 +357,11 @@ async def list_files(path: str):
         output_abs = output_dir.resolve()
 
         if not abs_path.is_relative_to(output_abs):
-            print(f"[ERROR] 拒绝访问: {abs_path} 不在 {output_abs} 目录下")
+            _logger.error("拒绝访问", extra={"abs_path": str(abs_path), "output_abs": str(output_abs)})
             return {"error": "拒绝访问: 只能访问输出目录下的文件"}
 
     except Exception as e:
-        print(f"[ERROR] 路径解析失败: {e}")
+        _logger.error("路径解析失败", extra={"error": str(e)})
         return {"error": f"路径无效: {e}"}
 
     if not abs_path.exists():
@@ -371,13 +384,41 @@ async def list_files(path: str):
                 )
 
     except Exception as e:
-        print(f"[ERROR] 遍历文件失败: {e}")
+        _logger.error("遍历文件失败", extra={"error": str(e)})
         return {"error": str(e)}
 
     # 最新生成的文件排在前面，方便用户优先看到本次任务产物
     files.sort(key=lambda x: x.get("mtime", 0), reverse=True)
-    print(f"[DEBUG] 找到 {len(files)} 个文件")
+    _logger.debug("找到文件", extra={"count": len(files)})
     return {"files": files}
+
+
+@app.get("/api/metrics")
+async def get_metrics(thread_id: str = None):
+    """
+    指标查询接口 (Metrics)。
+
+    返回工具调用、任务流转、Token 消耗和 WebSocket 连接状态的当前快照。
+
+    查询参数:
+        thread_id (str, optional): 按会话过滤工具和 Token 维度。
+            不传时返回全局聚合数据。
+
+    示例:
+        GET /api/metrics                       # 全局聚合
+        GET /api/metrics?thread_id=abc123      # 只返回该会话的指标 + 最近调用明细
+    """
+    return metrics_collector.snapshot(thread_id=thread_id)
+
+
+@app.get("/api/health")
+async def health_check():
+    """
+    健康检查接口 (Health Check)。
+
+    用于负载均衡器和监控系统确认服务正常运行。
+    """
+    return {"status": "healthy", "timestamp": datetime.datetime.now().isoformat()}
 
 
 @app.websocket("/ws/{thread_id}")
@@ -389,10 +430,11 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str):
     发送事件时只需要按 thread_id 查找连接，就能把进度推给对应页面。循环中的
     receive_text 用于接收前端心跳，避免连接空闲断开。
     """
-    print(f"会话向我们发起了请求，要求建立连接：{thread_id} 对应：{websocket}")
+    _logger.info("WebSocket 连接请求", extra={"thread_id": thread_id})
 
     # 连接建立后立即按 thread_id 注册，monitor 后续才能把事件定向推给当前页面
     await manager.connect(websocket, thread_id)
+    metrics_collector.increment_active_connections()                # metrics_collector 记录活跃连接数(加一)
 
     try:
         while True:
@@ -401,14 +443,18 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str):
             await websocket.send_json(
                 {"type": "pong", "message": f"服务端已收到: {data}"}
             )
+            metrics_collector.record_ws_message_sent()              # metrics_collector 记录 WebSocket 消息发送次数（加一）
 
     except WebSocketDisconnect:
         # 只移除当前 WebSocket 实例，避免旧连接断开时误删同 thread_id 的新连接
         manager.disconnect(websocket, thread_id)
-        print(f"[WebSocket] 客户端已断开: {thread_id}")
+        metrics_collector.decrement_active_connections()            # metrics_collector 记录活跃连接数（减一）
+        _logger.info("客户端已断开", extra={"thread_id": thread_id})
 
     except Exception as e:
-        print(f"[WebSocket] 连接异常: {e}")
+        _logger.error("WebSocket 连接异常", extra={"thread_id": thread_id, "error": str(e)})
+        metrics_collector.record_ws_error()                         # metrics_collector 记录 WebSocket 错误(加一)
+        metrics_collector.decrement_active_connections()            # metrics_collector 记录活跃连接数（减一）
         manager.disconnect(websocket, thread_id)
 
 

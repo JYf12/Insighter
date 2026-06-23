@@ -4,6 +4,9 @@ MySQL 数据库查询工具模块
 封装数据库查询助手使用的三个 LangChain 工具：
 list_sql_tables 用于发现真实表名，get_table_data 用于预览字段和样例数据，
 execute_sql_query 用于在确认结构后执行自定义查询。
+
+注意：计时/埋点/指标更新已由 observability_middleware 统一接管，
+工具文件不再需要手工调用 time.perf_counter() 或 monitor.report_tool_end/failure()。
 """
 
 import os
