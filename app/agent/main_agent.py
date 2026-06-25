@@ -45,6 +45,8 @@ def init_main_agent(checkpointer):
 
     在 FastAPI lifespan 启动阶段调用，注入 AsyncSqliteSaver / InMemorySaver 等实例。
     原先 InMemorySaver() 硬编码已被移除，checkpointer 由上层生命周期管理。
+
+    create_summarization_tool_middleware中间件赋予主智能体工具化压缩上下文的能力
     """
     global _main_agent
     _main_agent = create_deep_agent(

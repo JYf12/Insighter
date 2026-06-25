@@ -23,7 +23,7 @@ redis>=5.0                     # Redis 客户端，用于异步任务队列持�
 
 # --- 语义缓存 (Semantic Cache) ---
 sentence-transformers>=3.0.0   # 本地 embedding 推理（all-MiniLM-L6-v2，约 80MB）
-torch>=2.0.0                   # PyTorch 后端，sentence-transformers 依赖
+torch>=2.1.0                   # PyTorch 后端，sentence-transformers 依赖
 
 # --- 文件处理 (File Processing - upload_file_read_tool) ---
 python-docx>=1.0.0          # Word (.docx) 读取
