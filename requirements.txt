@@ -21,6 +21,10 @@ python-multipart>=0.0.6     # 文件上传支持
 mysql-connector-python>=8.0.0  # MySQL 官方驱动，用于 mysql_tools
 redis>=5.0                     # Redis 客户端，用于异步任务队列持久化
 
+# --- 语义缓存 (Semantic Cache) ---
+sentence-transformers>=3.0.0   # 本地 embedding 推理（all-MiniLM-L6-v2，约 80MB）
+torch>=2.0.0                   # PyTorch 后端，sentence-transformers 依赖
+
 # --- 文件处理 (File Processing - upload_file_read_tool) ---
 python-docx>=1.0.0          # Word (.docx) 读取
 pypdf>=3.0.0                # PDF 读取，代码使用 pypdf

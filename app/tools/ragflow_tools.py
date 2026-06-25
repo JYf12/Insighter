@@ -15,11 +15,18 @@ from langchain_core.tools import tool
 from ragflow_sdk import RAGFlow
 
 from app.api.monitor import monitor
+from app.persistence.cache_store import check_cache, save_to_cache
 from app.ragflow.rag_config import _load_ragflow_env
+from app.utils.logger import get_logger
 
 # 模块级复用 RAGFlow 客户端，避免每次工具调用都重新初始化 SDK 对象
 api_key, base_url = _load_ragflow_env()
 ragflow_client = RAGFlow(api_key=api_key, base_url=base_url)
+
+# 缓存命名空间，与其他工具隔离
+CACHE_NAMESPACE = "ragflow"
+
+_logger = get_logger("ragflow_tools")
 
 
 # @tool 会把函数签名和 docstring 暴露给 DeepAgents，模型据此决定是否调用以及如何填参
@@ -56,7 +63,7 @@ def get_assistant_list() -> str:
 
 
 @tool
-def create_ask_delete(chat_name, question) -> str:
+async def create_ask_delete(chat_name, question) -> str:
     """
     向某个 RAGFlow 聊天助手创建临时会话并完成一次提问
 
@@ -70,6 +77,14 @@ def create_ask_delete(chat_name, question) -> str:
         tool_name="ragflow提问助手工具：create_ask_delete",
         args={"chat_name": chat_name, "question": question},
     )
+
+    # 缓存 key 使用 chat_name + question 复合，区分不同助手对同一问题的回答
+    cache_query = f"{chat_name}|||{question}"
+
+    # 1. 语义缓存检查
+    cached = await check_cache(CACHE_NAMESPACE, cache_query)
+    if cached is not None:
+        return cached
 
     try:
         # 先按名称找到 Chat 对象；真正提问时还需要在 Chat 下创建 Session
@@ -113,9 +128,18 @@ def create_ask_delete(chat_name, question) -> str:
 
         # 临时会话只用于本次工具调用，查询结束后删除，避免 RAGFlow 页面堆积无用会话
         use_chat.delete_sessions(ids=[session.id])
+
+        # 3. 存入缓存（异步，不阻塞返回）
+        try:
+            await save_to_cache(CACHE_NAMESPACE, cache_query, result)
+        except Exception as e:
+            _logger.debug("Failed to cache RAGFlow result", extra={"error": str(e)})
+
         return result
     except Exception as e:
-        return f"提问失败，错误原因：{str(e)}"
+        error_msg = f"提问失败，错误原因：{str(e)}"
+        # 异常结果不缓存，避免错误信息污染缓存池
+        return error_msg
 
 
 # if __name__ == "__main__":
