@@ -207,6 +207,22 @@ class ToolMonitor:
         """报告当前任务工作目录"""
         self._emit("session_created", f"工作目录已创建: {path}", {"path": path})
 
+    def report_cache_hit(self, namespace: str, query: str, lookup_ms: float) -> None:
+        """报告语义缓存命中（跳过外部 API 调用）"""
+        self._emit(
+            "cache_hit",
+            f"缓存命中: {namespace} — 跳过API调用",
+            {"namespace": namespace, "query": query[:100], "lookup_ms": round(lookup_ms, 1)},
+        )
+
+    def report_cache_miss(self, namespace: str, query: str, lookup_ms: float) -> None:
+        """报告语义缓存未命中（将执行真实 API 调用）"""
+        self._emit(
+            "cache_miss",
+            f"缓存未命中: {namespace} — 执行API调用",
+            {"namespace": namespace, "query": query[:100], "lookup_ms": round(lookup_ms, 1)},
+        )
+
 
 monitor = ToolMonitor()
 

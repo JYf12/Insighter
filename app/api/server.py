@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from app.agent.main_agent import init_main_agent, run_deep_agent
 from app.api.metrics import metrics_collector
 from app.api.monitor import manager
+from app.persistence.cache_store import get_cache_store, init_cache
 from app.persistence.checkpoint import CheckpointManager
 from app.persistence.task_store import TaskStore
 from app.utils.logger import get_logger
@@ -64,17 +65,22 @@ async def lifespan(_app: FastAPI):
     _app.state.task_store = task_store
     _logger.info("Redis task store initialized")
 
-    # 2. 初始化 SQLite 检查点管理器
+    # 2. 初始化语义缓存存储（Embedding 模型 + Redis 缓存池）
+    cache_store = await init_cache()
+    _app.state.cache_store = cache_store
+    _logger.info("Semantic cache store initialized")
+
+    # 3. 初始化 SQLite 检查点管理器
     checkpoint_mgr = CheckpointManager()
     await checkpoint_mgr.start()
     _app.state.checkpoint_mgr = checkpoint_mgr
     _logger.info("SQLite checkpoint manager started")
 
-    # 3. 初始化主智能体（注入 SqliteSaver 替代 InMemorySaver）
+    # 4. 初始化主智能体（注入 SqliteSaver 替代 InMemorySaver）
     init_main_agent(checkpoint_mgr.checkpointer)
     _logger.info("Main agent initialized with SqliteSaver")
 
-    # 4. 恢复中断的任务
+    # 5. 恢复中断的任务
     await _recover_tasks(task_store)
     _logger.info("Task recovery complete")
 
@@ -83,6 +89,7 @@ async def lifespan(_app: FastAPI):
     # ---- 关闭阶段 ----
     _logger.info("Shutting down...")
     await checkpoint_mgr.stop()
+    await cache_store.stop()
     await task_store.stop()
     _logger.info("Clean shutdown complete")
 

@@ -79,6 +79,12 @@ class MetricsCollector:
         self._ws_errors: int = 0
         self._active_connections: int = 0
 
+        # ---- 缓存维度（按 namespace）----
+        self._cache_hits: dict[str, int] = defaultdict(int)
+        self._cache_misses: dict[str, int] = defaultdict(int)
+        self._cache_lookup_total_ms: dict[str, float] = defaultdict(float)
+        self._cache_lookup_count: dict[str, int] = defaultdict(int)
+
     # ------------------------------------------------------------------
     # 上下文辅助
     # ------------------------------------------------------------------
@@ -209,6 +215,24 @@ class MetricsCollector:
             self._active_connections = max(0, self._active_connections - 1)
 
     # ------------------------------------------------------------------
+    # 缓存维度
+    # ------------------------------------------------------------------
+
+    def record_cache_hit(self, namespace: str, lookup_ms: float) -> None:
+        """记录一次缓存命中"""
+        with self._data_lock:
+            self._cache_hits[namespace] += 1
+            self._cache_lookup_total_ms[namespace] += lookup_ms
+            self._cache_lookup_count[namespace] += 1
+
+    def record_cache_miss(self, namespace: str, lookup_ms: float) -> None:
+        """记录一次缓存未命中"""
+        with self._data_lock:
+            self._cache_misses[namespace] += 1
+            self._cache_lookup_total_ms[namespace] += lookup_ms
+            self._cache_lookup_count[namespace] += 1
+
+    # ------------------------------------------------------------------
     # 快照导出
     # ------------------------------------------------------------------
 
@@ -245,11 +269,15 @@ class MetricsCollector:
                 "active_connections": self._active_connections,
             }
 
+            # ---- 缓存维度（进程级） ----
+            cache = self._build_cache_snapshot()
+
             return {
                 "tools": tools,
                 "tasks": tasks,
                 "token_usage": token_usage,
                 "websocket": websocket,
+                "cache": cache,
             }
 
     # ------------------------------------------------------------------
@@ -332,6 +360,28 @@ class MetricsCollector:
             "total_completion_tokens": total_completion,
             "total_tokens": total_all,
             "per_call_histogram": None,
+        }
+
+    def _build_cache_snapshot(self) -> dict[str, Any]:
+        """构建缓存维度快照"""
+        result: dict[str, dict[str, Any]] = {}
+        all_namespaces = set(self._cache_hits.keys()) | set(self._cache_misses.keys())
+        for ns in sorted(all_namespaces):
+            hits = self._cache_hits.get(ns, 0)
+            misses = self._cache_misses.get(ns, 0)
+            total_lookups = hits + misses
+            total_ms = self._cache_lookup_total_ms.get(ns, 0.0)
+            count = self._cache_lookup_count.get(ns, 0)
+            result[ns] = {
+                "hits": hits,
+                "misses": misses,
+                "hit_rate": round(hits / total_lookups, 3) if total_lookups > 0 else 0,
+                "avg_lookup_ms": round(total_ms / count, 1) if count > 0 else 0,
+            }
+        return {
+            "by_namespace": result,
+            "total_hits": sum(self._cache_hits.values()),
+            "total_misses": sum(self._cache_misses.values()),
         }
 
 
