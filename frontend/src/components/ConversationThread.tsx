@@ -36,36 +36,36 @@ interface ConversationThreadProps {
 
 const TASK_EXAMPLES = [
   {
-    tool: "网络搜索工具",
-    title: "联网趋势研判",
+    tool: "Web Search",
+    title: "Trend Research",
     prompt:
       "请使用网络搜索工具，检索 2026 年跨境电商 AI 客服趋势，列出 5 条关键变化，并附上来源链接。",
     icon: <CloudServerOutlined aria-hidden />,
   },
   {
-    tool: "数据库查询工具",
-    title: "药品库存排查",
+    tool: "Database Query",
+    title: "Inventory Check",
     prompt:
       "请请使用数据库查询工具，查询库存大于 100 的药品，按库存量升序列出药品名称、批次号、仓库位置和过期日期。",
     icon: <DatabaseOutlined aria-hidden />,
   },
   {
-    tool: "RAGFlow 知识库",
-    title: "内部文档问答",
+    tool: "RAGFlow Knowledge Base",
+    title: "Document Q&A",
     prompt:
       "请使用 RAGFlow 助手，查询公司内部白皮书中关于品类策略的内容，并整理成三条可执行建议。",
     icon: <FileSearchOutlined aria-hidden />,
   },
   {
-    tool: "文件读取工具",
-    title: "上传文件分析",
+    tool: "File Reader",
+    title: "Upload Analysis",
     prompt:
       "请使用文件读取工具，读取我上传的文件，提炼核心观点、风险点和待补充信息，并给出下一步分析计划。",
     icon: <FileTextOutlined aria-hidden />,
   },
   {
-    tool: "Markdown/PDF 工具",
-    title: "生成交付报告",
+    tool: "Report Generation",
+    title: "Deliver Report",
     prompt:
       "请使用 Markdown 文档生成工具和 Markdown 转 PDF 工具，基于本次调研结果生成一份 Markdown 报告，并转换成 PDF 保存到当前工作目录。",
     icon: <FileMarkdownOutlined aria-hidden />,
@@ -193,7 +193,7 @@ function ThinkingTimeline({ events }: { events: MonitorMessage[] }) {
     return (
       <div className="thinking-empty">
         <ClockCircleOutlined aria-hidden />
-        等待后端推送执行事件
+        Waiting for backend events…
       </div>
     );
   }
@@ -232,7 +232,7 @@ function ArtifactShelf({ files }: { files: OutputFile[] }) {
     return (
       <div className="artifact-empty">
         <FileSearchOutlined aria-hidden />
-        暂无输出文件
+        No output files yet
       </div>
     );
   }
@@ -272,8 +272,8 @@ function ThinkingLoader({ durationLabel }: { durationLabel: string }) {
     >
       <div className="loader-status">
         <span className="loader-pulse" aria-hidden />
-        <strong>正在研搜</strong>
-        <span className="loader-duration">已思考 {durationLabel}</span>
+        <strong>Researching</strong>
+        <span className="loader-duration">Thinking {durationLabel}</span>
         <span className="loader-dots" aria-hidden>
           <i />
           <i />
@@ -282,9 +282,9 @@ function ThinkingLoader({ durationLabel }: { durationLabel: string }) {
       </div>
       <div className="loader-track" aria-hidden />
       <ul className="loader-steps" aria-hidden>
-        <li>理解问题</li>
-        <li>调度工具</li>
-        <li>汇总答案</li>
+        <li>Understanding</li>
+        <li>Dispatching</li>
+        <li>Synthesizing</li>
       </ul>
     </div>
   );
@@ -314,15 +314,15 @@ function AssistantMessage({
   const durationLabel = getThinkingDuration(events, timestamp, isRunning, now);
   const isCancelled = events.some((event) => event.event === "task_cancelled");
   const syncLabel = isRunning
-    ? `生成中 · 思考 ${durationLabel}`
-    : `${isCancelled ? "已取消" : "已同步"} · 用时 ${durationLabel}`;
+    ? `Generating · ${durationLabel}`
+    : `${isCancelled ? "Cancelled" : "Synced"} · ${durationLabel}`;
 
   return (
     <article className="chat-message chat-message--assistant">
       <div className="message-avatar">AI</div>
       <div className="message-bubble">
         <div className="message-meta">
-          <span>DeepSearch Agents</span>
+          <span>Insighter Agent</span>
           <time>{syncLabel}</time>
         </div>
 
@@ -333,7 +333,7 @@ function AssistantMessage({
           <summary>
             <span>
               <BranchesOutlined aria-hidden />
-              深度研搜过程
+              Research Process
             </span>
             <strong>{events.length}</strong>
           </summary>
@@ -349,7 +349,7 @@ function AssistantMessage({
             {isRunning ? (
               <ThinkingLoader durationLabel={durationLabel} />
             ) : (
-              "任务完成后会在这里显示最终回复。"
+              "Results will appear here once the task completes."
             )}
           </div>
         )}
@@ -361,7 +361,7 @@ function AssistantMessage({
           <summary>
             <span>
               <FileSearchOutlined aria-hidden />
-              输出文件
+              Output Files
             </span>
             <strong>{files.length}</strong>
           </summary>
@@ -381,14 +381,14 @@ export function ConversationThread({
       <div className="conversation-empty">
         <div className="empty-examples">
           <div className="empty-examples-copy">
-            <span className="panel-kicker">TASK EXAMPLES</span>
-            <h3>选择一个工具任务开始</h3>
+            <span className="panel-kicker">EXAMPLES</span>
+            <h3>Choose a research task</h3>
             <p>
-              每个示例会触发不同工具路径，执行轨迹和输出文件会直接出现在对话里。
+              Each example triggers a different tool path — execution traces and output files will appear directly in the conversation.
             </p>
           </div>
 
-          <div className="example-grid" aria-label="研搜任务示例">
+          <div className="example-grid" aria-label="Research task examples">
             {TASK_EXAMPLES.map((example) => (
               <button
                 className="example-card"
@@ -411,13 +411,13 @@ export function ConversationThread({
   }
 
   return (
-    <div className="conversation-thread" aria-label="聊天消息流">
+    <div className="conversation-thread" aria-label="Chat message stream">
       {turns.map((turn) => (
         <div className="conversation-turn" key={turn.id}>
           <article className="chat-message chat-message--user">
             <div className="message-bubble">
               <div className="message-meta">
-                <span>你</span>
+                <span>You</span>
                 <time dateTime={turn.timestamp}>
                   {formatTime(turn.timestamp)}
                 </time>

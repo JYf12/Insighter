@@ -82,9 +82,9 @@ export function ChatComposer({
   }
 
   return (
-    <section className="chat-composer" aria-label="发送研搜任务">
+    <section className="chat-composer" aria-label="Send research task">
       {uploadedItems.length > 0 ? (
-        <div className="attachment-strip" aria-label="当前会话附件">
+        <div className="attachment-strip" aria-label="Session attachments">
           {uploadedItems.map((item) => (
             <span className="attachment-pill" key={`${item.uid}-${item.name}`}>
               <PaperClipOutlined aria-hidden />
@@ -102,13 +102,13 @@ export function ChatComposer({
               {item.name}
             </span>
           ))}
-          {isUploading ? <span className="attachment-uploading">附着中...</span> : null}
+          {isUploading ? <span className="attachment-uploading">Attaching…</span> : null}
         </div>
       ) : null}
 
       <div className="composer-shell">
         <textarea
-          aria-label="研搜任务"
+          aria-label="Research task"
           disabled={isRunning}
           onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={(event) => {
@@ -117,15 +117,15 @@ export function ChatComposer({
               onSubmit();
             }
           }}
-          placeholder="向 DeepSearch Agents 发送任务..."
+          placeholder="Ask Insighter anything…"
           value={query}
         />
 
         <div className="composer-toolbar">
           <div className="composer-left-actions">
-            <Tooltip title="新建会话">
+            <Tooltip title="New session">
               <Button
-                aria-label="新建会话"
+                aria-label="New session"
                 className="composer-icon-button"
                 icon={<PlusOutlined />}
                 onClick={onNewSession}
@@ -141,9 +141,9 @@ export function ChatComposer({
               }}
               showUploadList={false}
             >
-              <Tooltip title="选择附件">
+              <Tooltip title="Attach files">
                 <Button
-                  aria-label="选择附件"
+                  aria-label="Attach files"
                   className="composer-icon-button"
                   disabled={isRunning || isUploading}
                   icon={<PaperClipOutlined />}
@@ -153,9 +153,9 @@ export function ChatComposer({
             </Upload>
           </div>
 
-          <Tooltip title={isRunning ? "取消当前任务" : "发送任务"}>
+          <Tooltip title={isRunning ? "Cancel task" : "Send task"}>
             <Button
-              aria-label={isRunning ? "取消当前任务" : "发送任务"}
+              aria-label={isRunning ? "Cancel task" : "Send task"}
               className={isRunning ? "send-button send-button--cancel" : "send-button"}
               disabled={isRunning ? isCancelling : !canSubmit}
               icon={isRunning ? <StopOutlined /> : <SendOutlined />}

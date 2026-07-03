@@ -22,6 +22,7 @@ export function useDeepAgentSession() {
   const reconnectTimerRef = useRef<number | undefined>(undefined);
   const heartbeatTimerRef = useRef<number | undefined>(undefined);
   const uploadedNameSetRef = useRef<Set<string>>(new Set());
+  const sessionPathRef = useRef("");
   const [threadId, setThreadId] = useState(getStoredThreadId);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [events, setEvents] = useState<MonitorMessage[]>([]);
@@ -34,6 +35,14 @@ export function useDeepAgentSession() {
   const [isCancelling, setIsCancelling] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedItems, setUploadedItems] = useState<UploadedItem[]>([]);
+
+  /** Fetch files for a given path — does NOT read state (stale-closure safe). */
+  const fetchFilesForPath = useCallback(async (path: string) => {
+    if (!path) return;
+    const response = await listSessionFiles(path);
+    if (response.error) throw new Error(response.error);
+    setFiles(response.files || []);
+  }, []);
 
   const clearSocketTimers = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -52,6 +61,7 @@ export function useDeepAgentSession() {
     setThreadId(nextThreadId);
     setEvents([]);
     setFiles([]);
+    sessionPathRef.current = "";
     setSessionPath("");
     setResult("");
     setLastError("");
@@ -62,15 +72,16 @@ export function useDeepAgentSession() {
   }, []);
 
   const refreshFiles = useCallback(async () => {
-    if (!sessionPath) {
-      return;
-    }
-
-    const response = await listSessionFiles(sessionPath);
-    if (response.error) {
-      throw new Error(response.error);
-    }
+    const path = sessionPathRef.current;  // always fresh — ref, not state
+    if (!path) return;
+    const response = await listSessionFiles(path);
+    if (response.error) throw new Error(response.error);
     setFiles(response.files || []);
+  }, []);
+
+  // Keep the ref in sync with the state so onmessage can read it without closure staleness
+  useEffect(() => {
+    sessionPathRef.current = sessionPath;
   }, [sessionPath]);
 
   useEffect(() => {
@@ -118,7 +129,10 @@ export function useDeepAgentSession() {
           if (payload.event === "session_created") {
             const path = extractString(payload.data, "path");
             if (path) {
+              sessionPathRef.current = path;
               setSessionPath(path);
+              // Fetch files immediately — may include pre-uploaded files
+              fetchFilesForPath(path).catch(() => {});
             }
           }
 
@@ -127,12 +141,15 @@ export function useDeepAgentSession() {
             setResult(finalResult || payload.message);
             setIsRunning(false);
             setIsCancelling(false);
+            // Task completed — refresh files to pick up generated reports
+            fetchFilesForPath(sessionPathRef.current).catch(() => {});
           }
 
           if (payload.event === "task_cancelled") {
             setResult((previous) => previous || payload.message);
             setIsRunning(false);
             setIsCancelling(false);
+            fetchFilesForPath(sessionPathRef.current).catch(() => {});
           }
 
           if (payload.event === "error") {
@@ -175,22 +192,11 @@ export function useDeepAgentSession() {
   }, [clearSocketTimers, threadId]);
 
   useEffect(() => {
-    if (!sessionPath) {
-      return;
+    // One-time initial fetch when session path becomes known (covers page reload)
+    if (sessionPath) {
+      fetchFilesForPath(sessionPath).catch(() => {});
     }
-
-    // refreshFiles().catch((error: unknown) => {
-    //   setLastError(error instanceof Error ? error.message : "文件列表刷新失败");
-    // });
-    //
-    // const timer = window.setInterval(() => {
-    //   refreshFiles().catch((error: unknown) => {
-    //     setLastError(error instanceof Error ? error.message : "文件列表刷新失败");
-    //   });
-    // }, isRunning ? 5000 : 30000);
-    //
-    // return () => window.clearInterval(timer);
-  }, [isRunning, refreshFiles, sessionPath]);
+  }, [fetchFilesForPath, sessionPath]);
 
   const submitTask = useCallback(
     async (query: string) => {

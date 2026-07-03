@@ -9,30 +9,30 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ConfigProvider
       theme={{
-        algorithm: theme.darkAlgorithm,
+        algorithm: theme.defaultAlgorithm,
         token: {
-          colorPrimary: "#20d6ff",
-          colorSuccess: "#5dff9f",
-          colorWarning: "#ffc857",
-          colorError: "#ff5c7a",
-          colorInfo: "#7c8cff",
-          colorBgBase: "#05070b",
-          colorBgContainer: "rgba(12, 18, 28, 0.86)",
-          colorBorder: "rgba(113, 247, 255, 0.18)",
-          borderRadius: 8,
+          colorPrimary: "#4f6ef6",
+          colorSuccess: "#22c55e",
+          colorWarning: "#f59e0b",
+          colorError: "#ef4444",
+          colorInfo: "#4f6ef6",
+          colorBgBase: "#ffffff",
+          colorBgContainer: "#ffffff",
+          colorBorder: "#e8eaed",
+          borderRadius: 10,
           fontFamily:
-            "'IBM Plex Sans', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif",
+            "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', system-ui, sans-serif",
           fontFamilyCode:
             "'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace"
         },
         components: {
           Button: {
             controlHeightLG: 46,
-            primaryShadow: "0 0 24px rgba(32, 214, 255, 0.26)"
+            primaryShadow: "0 2px 8px rgba(79, 110, 246, 0.2)"
           },
           Input: {
-            activeBorderColor: "#20d6ff",
-            hoverBorderColor: "#5dff9f"
+            activeBorderColor: "#4f6ef6",
+            hoverBorderColor: "#4f6ef6"
           }
         }
       }}

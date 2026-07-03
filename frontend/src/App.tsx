@@ -19,10 +19,10 @@ import type { ConnectionState, UploadedItem } from "./types";
 
 function connectionLabel(state: ConnectionState): string {
   const labels: Record<ConnectionState, string> = {
-    connecting: "连接中",
-    connected: "已连接",
-    reconnecting: "重连中",
-    closed: "已关闭"
+    connecting: "Connecting",
+    connected: "Connected",
+    reconnecting: "Reconnecting",
+    closed: "Closed"
   };
   return labels[state];
 }
@@ -83,7 +83,7 @@ export default function App() {
   async function handleSubmit() {
     const cleanQuery = query.trim();
     if (!cleanQuery) {
-      message.warning("请输入研搜任务");
+      message.warning("Please enter a research task");
       return;
     }
 
@@ -93,7 +93,7 @@ export default function App() {
 
     try {
       await session.submitTask(cleanQuery);
-      message.success("任务已启动，执行过程会显示在对话中");
+      message.success("Task started — progress will appear in the conversation");
     } catch (error) {
       setTurns((previous) =>
         previous.map((turn) =>
@@ -101,21 +101,21 @@ export default function App() {
             ? {
                 ...turn,
                 isRunning: false,
-                result: error instanceof Error ? error.message : "任务启动失败"
+                result: error instanceof Error ? error.message : "Task failed to start"
               }
             : turn
         )
       );
-      message.error(error instanceof Error ? error.message : "任务启动失败");
+      message.error(error instanceof Error ? error.message : "Task failed to start");
     }
   }
 
   async function handleCancel() {
     try {
       const response = await session.cancelCurrentTask();
-      message.info(response.status === "cancelling" ? "取消请求已发送，正在等待当前调用结束" : "任务已取消");
+      message.info(response.status === "cancelling" ? "Cancelling… waiting for current call to finish" : "Task cancelled");
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "取消任务失败");
+      message.error(error instanceof Error ? error.message : "Failed to cancel task");
     }
   }
 
@@ -123,9 +123,9 @@ export default function App() {
     try {
       const response = await session.uploadFiles(items);
       setStagedItems([]);
-      message.success(`已上传 ${response.files.length} 个文件`);
+      message.success(`Uploaded ${response.files.length} file(s)`);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "上传失败");
+      message.error(error instanceof Error ? error.message : "Upload failed");
     }
   }
 
@@ -140,15 +140,15 @@ export default function App() {
 
   return (
     <div className="chat-app-shell min-h-dvh">
-      <aside className="chat-sidebar" aria-label="会话信息">
+      <aside className="chat-sidebar" aria-label="Session info">
         <div className="sidebar-brand">
-          <span className="panel-kicker">DEEPSEARCH</span>
-          <h1>深度研搜</h1>
-          <p>对话式多智能体研究台</p>
+          <span className="panel-kicker">INSIGHTER</span>
+          <h1>Insighter</h1>
+          <p>Multi-agent deep research console</p>
         </div>
 
         <Button className="new-chat-button" block onClick={handleNewSession}>
-          新建研搜
+          New Research
         </Button>
 
         <div className="sidebar-section">
@@ -166,17 +166,17 @@ export default function App() {
           </div>
           <div className="sidebar-status">
             <BranchesOutlined aria-hidden />
-            <span>助手调度</span>
+            <span>Assistants</span>
             <strong>{session.stats.assistantEvents}</strong>
           </div>
           <div className="sidebar-status">
             <ToolOutlined aria-hidden />
-            <span>工具调用</span>
+            <span>Tool calls</span>
             <strong>{session.stats.toolEvents}</strong>
           </div>
           <div className={session.stats.errorEvents > 0 ? "sidebar-status sidebar-status--error" : "sidebar-status"}>
             <CloseCircleOutlined aria-hidden />
-            <span>异常</span>
+            <span>Errors</span>
             <strong>{session.stats.errorEvents}</strong>
           </div>
         </div>
@@ -186,15 +186,15 @@ export default function App() {
           <ul className="agent-mini-list">
             <li>
               <CloudServerOutlined aria-hidden />
-              网络搜索助手
+              Web Search Agent
             </li>
             <li>
               <DatabaseOutlined aria-hidden />
-              数据库查询助手
+              Database Agent
             </li>
             <li>
               <FileSearchOutlined aria-hidden />
-              RAGFlow 助手
+              RAGFlow Agent
             </li>
           </ul>
         </div>
@@ -209,12 +209,12 @@ export default function App() {
       <main className="chat-main">
         <header className="chat-topbar">
           <div>
-            <span className="panel-kicker">CHAT WORKSPACE</span>
-            <h2>深度研搜对话</h2>
+            <span className="panel-kicker">WORKSPACE</span>
+            <h2>Research Chat</h2>
           </div>
           <div className={`run-indicator ${session.isRunning ? "run-indicator--live" : ""}`}>
             {session.isRunning ? <BranchesOutlined aria-hidden /> : <CheckCircleOutlined aria-hidden />}
-            {session.isRunning ? "研搜中" : "待命"}
+            {session.isRunning ? "Researching" : "Ready"}
           </div>
         </header>
 
