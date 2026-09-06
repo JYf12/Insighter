@@ -20,7 +20,7 @@
 
 ## 项目简介
 
-Insighter 是一个基于 **DeepAgents** 框架构建的多智能体深度研究系统。系统通过主智能体协调多个子智能体（联网搜索、知识库问答、数据库查询），完成复杂的深度研究任务，并提供实时流式交互的前端界面。
+Insighter 是一个基于 **DeepAgents** 框架构建的多智能体深度研究系统。系统通过主智能体协调多个子智能体，完成复杂的深度研究任务，并提供实时流式交互的前端界面。
 
 ### 核心特性
 
@@ -43,6 +43,14 @@ Insighter 是一个基于 **DeepAgents** 框架构建的多智能体深度研究
 | Docker | >= 20 | MySQL / Redis 容器化部署 |
 | uv | 推荐 | Python 包管理（也可用 pip） |
 
+## 后端启动
+
+```bash
+uvicorn app.api.server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+启动后访问 `http://localhost:8000`，`--reload` 参数开启热重载，代码修改后自动重启。
+
 ## 快速开始
 
 ### 1. 克隆项目
@@ -64,7 +72,7 @@ cp frontend/.env.example frontend/.env
 
 ## 环境变量说明
 
-复制 `.env.example` 为 `.env` 后按本机实际情况调整。以下按分组列出全部配置项：
+复制 `.env.example` 为 `.env` 后按本机实际情况调整
 
 ### LLM 配置（必填）
 
@@ -120,12 +128,10 @@ cp frontend/.env.example frontend/.env
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `CACHE_TTL_SECONDS` | 缓存有效期（秒），Tavily 和 RAGFlow 共用 | `3600` |
-| `CACHE_SIMILARITY_THRESHOLD` | cosine 相似度阈值，≥ 此值视为命中 | `0.92` |
+| `CACHE_TTL_SECONDS` | 缓存有效期（秒） | `3600` |
+| `CACHE_SIMILARITY_THRESHOLD` | cosine 相似度阈值 | `0.92` |
 
-### 任务级预算 (Autonomy Budget)
-
-任一维度触达即触发软停止：中断 astream → 注入收尾指令让模型用已有信息产出阶段性成果。
+### Autonomy Budget
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
@@ -200,9 +206,6 @@ deepsearch-agents/
 │   ├── agent/                    # 智能体 & 运行时引擎
 │   │   ├── main_agent.py         # 主智能体定义（任务规划 / 子智能体调度 / 文件生成）
 │   │   ├── subagents/            # 子智能体
-│   │   │   ├── network_search_agent.py   # 网络搜索助手（Tavily）
-│   │   │   ├── database_query_agent.py   # 数据库查询助手（MySQL）
-│   │   │   └── knowledge_base_agent.py   # RAGFlow 知识库助手
 │   │   ├── budget.py             # 任务级预算（四维：迭代/时间/工具/Token）
 │   │   ├── recovery.py           # Recovery Engine（错误分类 / 重试 / 熔断器 / @resilient）
 │   │   ├── run_context.py        # Task-run 上下文（RunContext / Span / RunRegistry）
@@ -215,59 +218,13 @@ deepsearch-agents/
 │   │   ├── metrics.py            # 指标采集器（工具/任务/Token/缓存/可靠性多维度）
 │   │   └── monitor.py            # 执行监控 & WebSocket 推送
 │   ├── tools/                    # 工具集
-│   │   ├── tavily_tool.py        # Tavily 联网搜索
-│   │   ├── db_tools.py           # MySQL 数据库查询
-│   │   ├── ragflow_tools.py      # RAGFlow 知识库检索
-│   │   ├── markdown_tools.py     # Markdown 文件生成
-│   │   ├── pdf_tools.py          # Markdown → PDF 转换
-│   │   └── upload_file_read_tool.py  # 文件上传读取
 │   ├── persistence/              # 持久化层
-│   │   ├── checkpoint.py         # LangGraph 检查点（SQLite）
-│   │   ├── cache_store.py        # 语义缓存（SentenceTransformer + Redis）
-│   │   ├── task_store.py         # 任务状态存储（Redis）
-│   │   └── trace_store.py        # Trace 持久化（Redis 近期窗口）
 │   ├── prompt/
-│   │   └── prompts.yml           # 提示词配置（主/子智能体名称、路由描述、系统提示词）
 │   ├── ragflow/                  # RAGFlow 知识库集成
 │   └── utils/                    # 工具函数
-│       ├── logger.py             # 统一日志
-│       ├── path_utils.py         # 路径工具
-│       └── word_converter.py     # Markdown → PDF（ReportLab）
 ├── frontend/                     # 前端（React 19 + Vite + Ant Design）
-│   └── src/
-│       ├── components/           # UI 组件
-│       │   ├── AgentTopology.tsx       # 智能体拓扑图
-│       │   ├── ChatComposer.tsx        # 聊天输入
-│       │   ├── ConversationThread.tsx  # 对话线程
-│       │   ├── EventStream.tsx         # 实时执行轨迹（LIVE TRACE）
-│       │   ├── FileDock.tsx            # 文件面板
-│       │   ├── MarkdownRenderer.tsx    # Markdown 渲染
-│       │   ├── MissionComposer.tsx     # 任务编辑
-│       │   ├── ResultPanel.tsx         # 结果面板
-│       │   ├── StatusStrip.tsx         # 状态栏
-│       │   ├── TraceDrawer.tsx         # Trace 调用链抽屉（span 树可视化）
-│       │   └── UploadPanel.tsx         # 文件上传
-│       ├── hooks/                # 自定义 Hooks
-│       │   └── useDeepAgentSession.ts  # 会话管理 Hook
-│       └── lib/                  # 工具库
-│           ├── api.ts            # 后端 API 调用
-│           ├── config.ts         # 前端配置
-│           ├── format.ts         # 格式化工具
-│           └── thread.ts         # 线程管理
 ├── docker/                       # Docker Compose（MySQL + Redis）
-│   ├── docker-compose.yaml
-│   └── mysql/mysql.sql           # MySQL 初始化脚本
 └── test/                         # 测试用例
-    ├── test_budget_soft_stop.py        # 预算软停止
-    ├── test_checkpoint_recovery_memory.py  # 检查点恢复
-    ├── test_circuit_breaker.py         # 熔断器
-    ├── test_metrics_isolation.py       # 指标会话隔离
-    ├── test_persistence_checkpoint.py  # 检查点持久化
-    ├── test_persistence_taskstore.py   # 任务存储
-    ├── test_recovery_retry.py          # 恢复重试
-    ├── test_redis_server_connect.py    # Redis 连接
-    ├── test_semantic_cache.py          # 语义缓存
-    └── test_trace_store.py             # Trace 存储
 ```
 
 ## 核心依赖
@@ -284,7 +241,7 @@ deepsearch-agents/
 | MySQL 8.4 | 业务数据存储 |
 | Redis 7 | 缓存 / 任务队列 / Trace 存储 |
 | SentenceTransformers | 本地语义嵌入与缓存加速 |
-| ReportLab | Markdown → PDF 转换（支持中文） |
+| ReportLab | Markdown → PDF 转换 |
 
 ## 开发说明
 
@@ -303,8 +260,9 @@ pnpm preview    # 预览生产构建
 pytest test/
 ```
 
+
 ---
 
 <div align='center'>
-  <p>🚀 ✨ 更多更新即将同步，敬请期待…… 🎉 🔥</p>
+  <p>🚀 Taking things slowly leads to better results; Everything will eventually head in the right direction. 🎉 🔥</p>
 </div>
