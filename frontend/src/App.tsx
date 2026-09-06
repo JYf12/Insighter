@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChatComposer } from "./components/ChatComposer";
 import { ConversationThread } from "./components/ConversationThread";
 import type { ChatTurn } from "./components/ConversationThread";
+import { TraceDrawer } from "./components/TraceDrawer";
 import { API_BASE_URL, WS_BASE_URL } from "./lib/config";
 import { useDeepAgentSession } from "./hooks/useDeepAgentSession";
 import type { ConnectionState, UploadedItem } from "./types";
@@ -46,6 +47,10 @@ export default function App() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const streamRef = useRef<HTMLElement | null>(null);
   const session = useDeepAgentSession();
+  // ?trace=<run_id> 深链可直接打开某次 run 的调用链 Drawer(便于回放/联调)
+  const [traceRunId, setTraceRunId] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get("trace")
+  );
 
   useEffect(() => {
     setTurns((previous) => {
@@ -92,7 +97,15 @@ export default function App() {
     setQuery("");
 
     try {
-      await session.submitTask(cleanQuery);
+      const response = await session.submitTask(cleanQuery);
+      if (response.run_id) {
+        // 把本次 run 的 ID 挂到对应消息上,完成后即可打开调用链 trace
+        setTurns((previous) =>
+          previous.map((turn) =>
+            turn.id === nextTurn.id ? { ...turn, runId: response.run_id } : turn
+          )
+        );
+      }
       message.success("Task started — progress will appear in the conversation");
     } catch (error) {
       setTurns((previous) =>
@@ -230,6 +243,7 @@ export default function App() {
         <section className="chat-stream-panel" ref={streamRef}>
           <ConversationThread
             onUseExample={setQuery}
+            onViewTrace={setTraceRunId}
             turns={turns}
           />
         </section>
@@ -249,6 +263,12 @@ export default function App() {
           uploadedItems={session.uploadedItems}
         />
       </main>
+
+      <TraceDrawer
+        onClose={() => setTraceRunId(null)}
+        open={Boolean(traceRunId)}
+        runId={traceRunId}
+      />
     </div>
   );
 }

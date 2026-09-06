@@ -1849,3 +1849,212 @@ textarea {
     display: none;
   }
 }
+
+/* =============================================
+   TRACE DRAWER (span 树查看)
+   ============================================= */
+
+.trace-open-button {
+  color: var(--blue);
+  font-size: 11px;
+}
+
+.message-meta > span:first-child {
+  margin-right: auto;
+}
+
+.trace-drawer-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.trace-drawer-title code {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.trace-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 100%;
+}
+
+/* ---- run 摘要 ---- */
+.trace-summary {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--surface-strong);
+}
+.trace-summary-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  justify-content: space-between;
+}
+.trace-summary-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.trace-summary-line code {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.trace-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.trace-kind-counts {
+  display: inline-flex;
+  gap: 10px;
+}
+.trace-kind-counts b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.trace-budget-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.trace-budget-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.trace-budget-label {
+  color: var(--muted);
+}
+.trace-budget-chip strong {
+  color: var(--text);
+}
+
+/* ---- 树 ---- */
+.trace-tree-head {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.trace-tree {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  max-height: 46vh;
+  overflow: auto;
+}
+.trace-tree .ant-tree-node-content-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+.trace-tree .ant-tree-treenode {
+  width: 100%;
+}
+
+.trace-node-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 260px;
+  padding-right: 4px;
+}
+.trace-kind-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  font-size: 13px;
+}
+.trace-kind-icon--llm {
+  color: var(--blue);
+}
+.trace-kind-icon--tool {
+  color: var(--green);
+}
+.trace-kind-icon--chain {
+  color: #7c3aed;
+}
+.trace-node-name {
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--green);
+}
+.trace-status-dot--error {
+  background: var(--red);
+}
+.trace-status-dot--interrupted {
+  background: var(--amber);
+}
+.trace-node-meta {
+  margin-left: auto;
+  display: inline-flex;
+  flex: none;
+  gap: 10px;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.trace-node-tokens {
+  color: var(--blue);
+}
+
+/* ---- span 详情 ---- */
+.trace-detail {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--surface-strong);
+}
+.trace-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.trace-detail-code {
+  display: block;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.trace-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 0;
+  color: var(--muted);
+}

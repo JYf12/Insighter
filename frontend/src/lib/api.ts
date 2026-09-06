@@ -1,5 +1,12 @@
 import { API_BASE_URL } from "./config";
-import type { CancelTaskResponse, FileListResponse, TaskResponse, UploadResponse } from "../types";
+import type {
+  CancelTaskResponse,
+  FileListResponse,
+  TaskResponse,
+  TraceDocument,
+  TraceListResponse,
+  UploadResponse
+} from "../types";
 
 function apiUrl(path: string): string {
   return `${API_BASE_URL}${path}`;
@@ -66,4 +73,22 @@ export function getDownloadUrl(path: string): string {
   const url = new URL(apiUrl("/api/download"));
   url.searchParams.set("path", path);
   return url.toString();
+}
+
+export async function fetchTrace(runId: string): Promise<TraceDocument> {
+  return requestJson<TraceDocument>(
+    apiUrl(`/api/trace/${encodeURIComponent(runId)}`)
+  );
+}
+
+export async function listTraces(
+  threadId?: string,
+  limit = 20
+): Promise<TraceListResponse> {
+  const url = new URL(apiUrl("/api/traces"));
+  if (threadId) {
+    url.searchParams.set("thread_id", threadId);
+  }
+  url.searchParams.set("limit", String(limit));
+  return requestJson<TraceListResponse>(url);
 }
