@@ -16,6 +16,7 @@ import {
 import { Button, Tooltip } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { getDownloadUrl } from "../lib/api";
+import { formatBytes, formatDuration, formatTime } from "../lib/format";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import type { MonitorMessage, OutputFile } from "../types";
 
@@ -27,10 +28,13 @@ export interface ChatTurn {
   isRunning: boolean;
   result: string;
   timestamp: string;
+  /** 本次 run 的执行 ID(任务启动后由后端返回),用于打开调用链 trace */
+  runId?: string;
 }
 
 interface ConversationThreadProps {
   onUseExample: (prompt: string) => void;
+  onViewTrace?: (runId: string) => void;
   turns: ChatTurn[];
 }
 
@@ -72,45 +76,9 @@ const TASK_EXAMPLES = [
   },
 ];
 
-function formatTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "--:--";
-  }
-  return date.toLocaleTimeString("zh-CN", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) {
-    return `${value} B`;
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
 function parseTime(value: string): number | null {
   const time = new Date(value).getTime();
   return Number.isNaN(time) ? null : time;
-}
-
-function formatDuration(value: number): string {
-  const totalSeconds = Math.max(0, Math.floor(value / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const paddedMinutes = String(minutes).padStart(2, "0");
-  const paddedSeconds = String(seconds).padStart(2, "0");
-
-  if (hours > 0) {
-    return `${hours}:${paddedMinutes}:${paddedSeconds}`;
-  }
-  return `${paddedMinutes}:${paddedSeconds}`;
 }
 
 function getLastEventTime(
@@ -294,9 +262,14 @@ function AssistantMessage({
   events,
   files,
   isRunning,
+  onViewTrace,
   result,
+  runId,
   timestamp,
-}: Pick<ChatTurn, "events" | "files" | "isRunning" | "result" | "timestamp">) {
+}: Pick<ChatTurn, "events" | "files" | "isRunning" | "result" | "timestamp"> & {
+  runId?: string;
+  onViewTrace?: (runId: string) => void;
+}) {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -324,6 +297,18 @@ function AssistantMessage({
         <div className="message-meta">
           <span>Insighter Agent</span>
           <time>{syncLabel}</time>
+          {runId && !isRunning ? (
+            <Button
+              aria-label="查看本次调用的 trace 树"
+              className="trace-open-button"
+              icon={<BranchesOutlined />}
+              onClick={() => onViewTrace?.(runId)}
+              size="small"
+              type="text"
+            >
+              调用链
+            </Button>
+          ) : null}
         </div>
 
         <details
@@ -374,6 +359,7 @@ function AssistantMessage({
 
 export function ConversationThread({
   onUseExample,
+  onViewTrace,
   turns,
 }: ConversationThreadProps) {
   if (turns.length === 0) {
@@ -429,7 +415,9 @@ export function ConversationThread({
             events={turn.events}
             files={turn.files}
             isRunning={turn.isRunning}
+            onViewTrace={onViewTrace}
             result={turn.result}
+            runId={turn.runId}
             timestamp={turn.timestamp}
           />
         </div>

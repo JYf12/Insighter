@@ -32,11 +32,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.agent.main_agent import init_main_agent, run_deep_agent
+from app.agent.budget import BudgetConfig
 from app.api.metrics import metrics_collector
 from app.api.monitor import manager
 from app.persistence.cache_store import get_cache_store, init_cache
 from app.persistence.checkpoint import CheckpointManager
 from app.persistence.task_store import TaskStore
+from app.persistence.trace_store import get_trace_store, init_trace_store
 from app.utils.logger import get_logger
 
 _logger = get_logger("server")
@@ -76,11 +78,16 @@ async def lifespan(_app: FastAPI):
     _app.state.checkpoint_mgr = checkpoint_mgr
     _logger.info("SQLite checkpoint manager started")
 
-    # 4. 初始化主智能体（注入 SqliteSaver 替代 InMemorySaver）
+    # 4. 初始化 trace 持久化（Redis 近期窗口）
+    trace_store = await init_trace_store()
+    _app.state.trace_store = trace_store
+    _logger.info("Trace store initialized")
+
+    # 5. 初始化主智能体（注入 SqliteSaver 替代 InMemorySaver）
     init_main_agent(checkpoint_mgr.checkpointer)
     _logger.info("Main agent initialized with SqliteSaver")
 
-    # 5. 恢复中断的任务
+    # 6. 恢复中断的任务
     await _recover_tasks(task_store)
     _logger.info("Task recovery complete")
 
@@ -90,6 +97,7 @@ async def lifespan(_app: FastAPI):
     _logger.info("Shutting down...")
     await checkpoint_mgr.stop()
     await cache_store.stop()
+    await trace_store.stop()
     await task_store.stop()
     _logger.info("Clean shutdown complete")
 
@@ -127,6 +135,11 @@ class TaskRequest(BaseModel):
 
     query: str
     thread_id: str = None
+    # 可选 per-task 预算覆盖；未传时用环境变量默认值
+    max_iterations: int | None = None
+    max_runtime_s: float | None = None
+    max_tool_calls: int | None = None
+    max_tokens: int | None = None
 
 
 # ------------------------------------------------------------------
@@ -144,16 +157,25 @@ def _forget_task(thread_id: str, task: asyncio.Task) -> None:
         active_tasks.pop(thread_id, None)
 
 
-async def _run_task_with_lifecycle(query: str, thread_id: str, task_store: TaskStore, resume: bool = False):
+async def _run_task_with_lifecycle(
+    query: str,
+    thread_id: str,
+    task_store: TaskStore,
+    resume: bool = False,
+    budget_config: BudgetConfig | None = None,
+    run_id: str | None = None,
+):
     """
     带 Redis 状态跟踪的任务执行包装器。
 
     执行前标记 running，执行后根据结果标记 completed / failed / cancelled。
     :param resume: 是否从检查点恢复执行（中断的任务）
+    :param budget_config: per-task 预算覆盖（None 用环境变量默认值）
+    :param run_id: 本次执行尝试 ID（None 自动生成）
     """
     try:
         await task_store.mark_running(thread_id)
-        await run_deep_agent(query, thread_id, resume=resume)
+        await run_deep_agent(query, thread_id, resume=resume, budget_config=budget_config, run_id=run_id)
         await task_store.mark_completed(thread_id)
         metrics_collector.record_task_completed()                   # 统计任务完成（加一）
     except asyncio.CancelledError:
@@ -239,18 +261,29 @@ async def run_task(request: TaskRequest):
     # 持久化任务到 Redis
     await task_store.create_task(thread_id, request.query)
 
+    # 构建 per-task 预算（未传字段回退到环境变量默认）
+    budget_config = BudgetConfig.from_env(
+        max_iterations=request.max_iterations,
+        max_runtime_s=request.max_runtime_s,
+        max_tool_calls=request.max_tool_calls,
+        max_tokens=request.max_tokens,
+    )
+    run_id = str(uuid.uuid4())
+
     # 指标：记录任务启动
     metrics_collector.record_task_started()                                     # 统计任务启动（加一）
 
     # create_task 把长耗时 Agent 执行交给事件循环，接口本身不用等待最终结果
     # 使用 _run_task_with_lifecycle 包装器自动管理 Redis 中的任务状态
     task = asyncio.create_task(
-        _run_task_with_lifecycle(request.query, thread_id, task_store)
+        _run_task_with_lifecycle(
+            request.query, thread_id, task_store, budget_config=budget_config, run_id=run_id
+        )
     )
     active_tasks[thread_id] = task
     task.add_done_callback(lambda finished_task: _forget_task(thread_id, finished_task))
 
-    return {"status": "started", "thread_id": thread_id}
+    return {"status": "started", "thread_id": thread_id, "run_id": run_id}
 
 
 @app.post("/api/task/{thread_id}/cancel")
@@ -416,6 +449,30 @@ async def get_metrics(thread_id: str = None):
         GET /api/metrics?thread_id=abc123      # 只返回该会话的指标 + 最近调用明细
     """
     return metrics_collector.snapshot(thread_id=thread_id)
+
+
+@app.get("/api/trace/{run_id}")
+async def get_trace(run_id: str):
+    """
+    获取单次 task run 的完整 trace span 树。
+
+    用于事后复盘失败 run：返回 run 元信息、预算快照与有序 span 列表（含父子 run_id）。
+    """
+    trace = await get_trace_store().get_trace(run_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"未找到 run_id={run_id} 的 trace（可能已过期淘汰）")
+    return trace
+
+
+@app.get("/api/traces")
+async def list_traces(thread_id: str = None, limit: int = 20):
+    """
+    列出近期 task run（新在前）。
+
+    :param thread_id: 可选，按会话过滤；不传返回全局近期窗口
+    :param limit: 返回条数上限
+    """
+    return {"traces": await get_trace_store().list_runs(thread_id=thread_id, limit=limit)}
 
 
 @app.get("/api/health")

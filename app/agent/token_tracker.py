@@ -1,4 +1,12 @@
 """
+[已弃用] Token 记账职责已被 app/agent/instrumentation.py 的 InstrumentationCallback.on_llm_end 吸收。
+
+新方案经 astream 的 config["callbacks"] 注入,统一覆盖主+子智能体的 LLM 调用 token 采集,
+并叠加 trace span 与预算检查。llm.py 不再单独挂载本回调,避免与 config 回调重复触发。
+本文件保留仅供历史参考。
+
+---
+
 LangChain Token 追踪器
 
 通过挂载到 model.callbacks 上，利用 LangChain 的 Callback 层级传播机制，

@@ -26,6 +26,13 @@ _thread_id_ctx: ContextVar[Optional[str]] = ContextVar(
     default=None,
 )
 
+# run_id 标识"一次执行尝试";同一 thread_id 可能经历多次 run(首次执行 + 恢复续跑),
+# 每次 run 生成新的 run_id,与 trace_id 一一对应,供 task-run 级 trace 归属。
+_run_id_ctx: ContextVar[Optional[str]] = ContextVar(
+    "run_id",
+    default=None,
+)
+
 
 def set_session_context(path: str) -> Token[Optional[str]]:
     """
@@ -65,16 +72,41 @@ def get_thread_context() -> Optional[str]:
     return _thread_id_ctx.get()
 
 
+def set_run_context(run_id: str) -> Token[Optional[str]]:
+    """
+    设置当前请求链路的 run ID(一次执行尝试)
+
+    同一 thread_id 可能经历多次 run(首次执行 + 恢复续跑),每次生成新的 run_id,
+    与 trace_id 一一对应,供 task-run 级 trace 归属。
+    :param run_id: 本次 run 的唯一 ID
+    :return: reset 时需要使用的上下文 token
+    """
+    return _run_id_ctx.set(run_id)
+
+
+def get_run_context() -> Optional[str]:
+    """
+    获取当前请求链路的 run ID
+
+    :return: 当前 run ID；未设置时返回 None
+    """
+    return _run_id_ctx.get()
+
+
 def reset_session_context(
     session_token: Token[Optional[str]],
     thread_token: Optional[Token[Optional[str]]] = None,
+    run_token: Optional[Token[Optional[str]]] = None,
 ) -> None:
     """
     恢复请求上下文，避免本次任务信息残留到后续请求
 
     :param session_token: set_session_context 返回的 token
     :param thread_token: set_thread_context 返回的 token
+    :param run_token: set_run_context 返回的 token
     """
     _session_dir_ctx.reset(session_token)
     if thread_token is not None:
         _thread_id_ctx.reset(thread_token)
+    if run_token is not None:
+        _run_id_ctx.reset(run_token)
