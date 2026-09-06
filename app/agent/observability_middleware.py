@@ -1,4 +1,12 @@
 """
+[已弃用] 本模块的埋点职责已被 app/agent/instrumentation.py 的 InstrumentationCallback 吸收。
+
+新方案经 astream 的 config["callbacks"] 注入,由 LangGraph 传播到主 Agent + 子智能体子图
++ 所有 ToolNode,统一覆盖工具调用计时/失败计数(含子智能体内部,本中间件原覆盖不到处)。
+本文件保留仅供历史参考,不再挂载到 create_deep_agent 的 middleware 列表。
+
+---
+
 全链路可观测性中间件
 
 通过 @wrap_tool_call 实现工具调用的集中式埋点、计时和指标更新。

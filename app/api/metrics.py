@@ -85,6 +85,14 @@ class MetricsCollector:
         self._cache_lookup_total_ms: dict[str, float] = defaultdict(float)
         self._cache_lookup_count: dict[str, int] = defaultdict(int)
 
+        # ---- Harness 可靠性维度 ----
+        # 预算超限：按维度计（iterations/runtime/tool_calls/tokens）
+        self._budget_exceeded: dict[str, int] = defaultdict(int)
+        # 恢复重试次数：按工具计
+        self._recovery_retries: dict[str, int] = defaultdict(int)
+        # 熔断器短路次数：按工具计
+        self._breaker_trips: dict[str, int] = defaultdict(int)
+
     # ------------------------------------------------------------------
     # 上下文辅助
     # ------------------------------------------------------------------
@@ -233,6 +241,25 @@ class MetricsCollector:
             self._cache_lookup_count[namespace] += 1
 
     # ------------------------------------------------------------------
+    # Harness 可靠性维度
+    # ------------------------------------------------------------------
+
+    def record_budget_exceeded(self, dimension: str) -> None:
+        """记录一次预算超限触发（dimension: max_iterations/max_runtime/...）"""
+        with self._data_lock:
+            self._budget_exceeded[dimension] += 1
+
+    def record_recovery_retry(self, tool_name: str) -> None:
+        """记录一次恢复重试（含瞬态退避重试）"""
+        with self._data_lock:
+            self._recovery_retries[tool_name] += 1
+
+    def record_breaker_trip(self, tool_name: str) -> None:
+        """记录一次熔断器短路（open 期间直接返回不可用串）"""
+        with self._data_lock:
+            self._breaker_trips[tool_name] += 1
+
+    # ------------------------------------------------------------------
     # 快照导出
     # ------------------------------------------------------------------
 
@@ -272,12 +299,16 @@ class MetricsCollector:
             # ---- 缓存维度（进程级） ----
             cache = self._build_cache_snapshot()
 
+            # ---- 可靠性维度（进程级） ----
+            reliability = self._build_reliability_snapshot()
+
             return {
                 "tools": tools,
                 "tasks": tasks,
                 "token_usage": token_usage,
                 "websocket": websocket,
                 "cache": cache,
+                "reliability": reliability,
             }
 
     # ------------------------------------------------------------------
@@ -382,6 +413,26 @@ class MetricsCollector:
             "by_namespace": result,
             "total_hits": sum(self._cache_hits.values()),
             "total_misses": sum(self._cache_misses.values()),
+        }
+
+    def _build_reliability_snapshot(self) -> dict[str, Any]:
+        """构建可靠性维度快照：预算超限、恢复重试、熔断短路"""
+        # 熔断器实时状态来自 recovery 模块的全局注册表
+        try:
+            from app.agent.recovery import all_breakers_snapshot
+
+            breakers = all_breakers_snapshot()
+        except Exception:
+            breakers = {}
+
+        return {
+            "budget_exceeded": dict(self._budget_exceeded),
+            "budget_exceeded_total": sum(self._budget_exceeded.values()),
+            "recovery_retries": dict(self._recovery_retries),
+            "recovery_retries_total": sum(self._recovery_retries.values()),
+            "breaker_trips": dict(self._breaker_trips),
+            "breaker_trips_total": sum(self._breaker_trips.values()),
+            "breakers": breakers,
         }
 
 

@@ -3,6 +3,10 @@
 
 负责从 .env 中读取模型配置，并创建项目统一复用的模型对象
 后续主智能体和子智能体都从这里导入 model，避免在多个文件里重复加载环境变量
+
+Token 记账与 trace/budget 埋点已统一由 InstrumentationCallback 承担,
+经 astream 的 config["callbacks"] 注入,由 LangGraph 传播到主 Agent + 子智能体子图
++ 所有 ToolNode(覆盖子智能体内部)。本模块不再单独挂载回调,避免与 config 回调重复触发。
 """
 
 import os
@@ -19,9 +23,3 @@ model = init_chat_model(
     model_provider="openai",
 )
 
-# 挂载 Token 追踪器，利用 LangChain Callback 的层级传播机制
-# 自动捕获主智能体和所有子智能体的 token 消耗
-from app.agent.token_tracker import LangChainTokenTracker
-
-_token_tracker = LangChainTokenTracker()
-model.callbacks = [_token_tracker]

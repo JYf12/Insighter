@@ -15,6 +15,7 @@ from langchain_core.tools import tool
 from ragflow_sdk import RAGFlow
 
 from app.api.monitor import monitor
+from app.agent.recovery import resilient
 from app.persistence.cache_store import check_cache, save_to_cache
 from app.ragflow.rag_config import _load_ragflow_env
 from app.utils.logger import get_logger
@@ -31,6 +32,7 @@ _logger = get_logger("ragflow_tools")
 
 # @tool 会把函数签名和 docstring 暴露给 DeepAgents，模型据此决定是否调用以及如何填参
 @tool
+@resilient(tool_name="get_assistant_list")
 def get_assistant_list() -> str:
     """
     查询 RAGFlow 中有哪些聊天助手，以及每个助手关联了哪些知识库
@@ -43,26 +45,25 @@ def get_assistant_list() -> str:
     # 埋点：工具被调用后，前端可以展示当前正在查询 RAGFlow 助手列表
     monitor.report_tool(tool_name="ragflow聊天助手列表查询工具：get_assistant_list")
 
-    try:
-        # list_chats 查询的是 RAGFlow 的 Chat 层，不是 Dataset 层
-        # Chat 负责对外问答，Dataset 只负责承载文档
-        chat_list = ragflow_client.list_chats()
-        if not chat_list:
-            return "没有任何可用助手"
+    # list_chats 查询的是 RAGFlow 的 Chat 层，不是 Dataset 层
+    # Chat 负责对外问答，Dataset 只负责承载文档
+    # 异常(网络瞬态/鉴权永久)由 @resilient 分类:瞬态退避重试,其余回注 LLM
+    chat_list = ragflow_client.list_chats()
+    if not chat_list:
+        return "没有任何可用助手"
 
-        # 把每个助手的名称、描述和绑定知识库拼成模型容易阅读的路由信息
-        count_chat_info = ""
-        for chat in chat_list:
-            # 不同版本 SDK 字段可能为空，这里用 getattr 兼容没有绑定知识库的助手
-            dataset_names = getattr(chat, "kb_names", []) or []
+    # 把每个助手的名称、描述和绑定知识库拼成模型容易阅读的路由信息
+    count_chat_info = ""
+    for chat in chat_list:
+        # 不同版本 SDK 字段可能为空，这里用 getattr 兼容没有绑定知识库的助手
+        dataset_names = getattr(chat, "kb_names", []) or []
 
-            count_chat_info += f"助手名称:{chat.name};功能介绍：{chat.description}; 关联的知识库：{'、'.join(dataset_names)} \n"
-        return count_chat_info
-    except Exception as e:
-        return f"查询助手信息异常，无可用助手,异常信息:{str(e)}"
+        count_chat_info += f"助手名称:{chat.name};功能介绍：{chat.description}; 关联的知识库：{'、'.join(dataset_names)} \n"
+    return count_chat_info
 
 
 @tool
+@resilient(tool_name="create_ask_delete")
 async def create_ask_delete(chat_name, question) -> str:
     """
     向某个 RAGFlow 聊天助手创建临时会话并完成一次提问
@@ -86,60 +87,65 @@ async def create_ask_delete(chat_name, question) -> str:
     if cached is not None:
         return cached
 
-    try:
-        # 先按名称找到 Chat 对象；真正提问时还需要在 Chat 下创建 Session
-        chats = ragflow_client.list_chats(name=chat_name)
-        use_chat = chats[0]
+    # 主调用异常(网络瞬态/鉴权永久/坏助手名可纠错)由 @resilient 分类:
+    # 瞬态退避重试,可纠错/永久回注 LLM 自纠错
+    chats = ragflow_client.list_chats(name=chat_name)
+    use_chat = chats[0]
 
-        # 每次工具调用只创建一个临时会话，避免多轮上下文污染当前问题
-        session = use_chat.create_session(name="temp_session_ask")
+    # 每次工具调用只创建一个临时会话，避免多轮上下文污染当前问题
+    session = use_chat.create_session(name="temp_session_ask")
 
-        # SDK 暂未直接封装当前流式接口，这里通过底层 post 调用 Chat completions API
-        response = ragflow_client.post(
-            f"/chats/{use_chat.id}/completions",
-            {
-                "messages": [{"role": "user", "content": question}],
-                "stream": True,
-                "session_id": session.id,
-            },
-            stream=True,
-        )
-        result = ""
-        for line in response.iter_lines(decode_unicode=True):
-            if not line:
-                continue
+    # SDK 暂未直接封装当前流式接口，这里通过底层 post 调用 Chat completions API
+    response = ragflow_client.post(
+        f"/chats/{use_chat.id}/completions",
+        {
+            "messages": [{"role": "user", "content": question}],
+            "stream": True,
+            "session_id": session.id,
+        },
+        stream=True,
+    )
+    result = ""
+    for line in response.iter_lines(decode_unicode=True):
+        if not line:
+            continue
 
-            # RAGFlow 流式返回遵循 SSE 风格：每行以 data: 开头，[DONE] 表示结束
-            line = line.removeprefix("data:").strip()
-            if line == "[DONE]":
-                break
-            data = json.loads(line)
-            chunk_data = data.get("data")
-            if not isinstance(chunk_data, dict):
-                continue
-            answer = chunk_data.get("answer")
-            if answer:
-                # 部分流式片段会返回"截至当前的完整答案"，部分会返回增量内容
-                # 这里兼容两种情况，尽量避免重复拼接
-                if answer.startswith(result):
-                    result = answer
-                elif not result.startswith(answer):
-                    result += answer
-
-        # 临时会话只用于本次工具调用，查询结束后删除，避免 RAGFlow 页面堆积无用会话
-        use_chat.delete_sessions(ids=[session.id])
-
-        # 3. 存入缓存（异步，不阻塞返回）
+        # RAGFlow 流式返回遵循 SSE 风格：每行以 data: 开头，[DONE] 表示结束
+        line = line.removeprefix("data:").strip()
+        if line == "[DONE]":
+            break
+        # 逐行解析容错：单行畸形不中断整次查询
         try:
-            await save_to_cache(CACHE_NAMESPACE, cache_query, result)
-        except Exception as e:
-            _logger.debug("Failed to cache RAGFlow result", extra={"error": str(e)})
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            _logger.debug("Skip malformed SSE line", extra={"line": line[:80]})
+            continue
+        chunk_data = data.get("data")
+        if not isinstance(chunk_data, dict):
+            continue
+        answer = chunk_data.get("answer")
+        if answer:
+            # 部分流式片段会返回"截至当前的完整答案"，部分会返回增量内容
+            # 这里兼容两种情况，尽量避免重复拼接
+            if answer.startswith(result):
+                result = answer
+            elif not result.startswith(answer):
+                result += answer
 
-        return result
+    # 临时会话只用于本次工具调用，查询结束后删除，避免 RAGFlow 页面堆积无用会话
+    # 非关键清理：失败仅告警，不影响已获取的回答
+    try:
+        use_chat.delete_sessions(ids=[session.id])
     except Exception as e:
-        error_msg = f"提问失败，错误原因：{str(e)}"
-        # 异常结果不缓存，避免错误信息污染缓存池
-        return error_msg
+        _logger.warning("Failed to delete temp RAGFlow session", extra={"error": str(e)})
+
+    # 存入缓存（异步，不阻塞返回）；错误结果不缓存
+    try:
+        await save_to_cache(CACHE_NAMESPACE, cache_query, result)
+    except Exception as e:
+        _logger.debug("Failed to cache RAGFlow result", extra={"error": str(e)})
+
+    return result
 
 
 # if __name__ == "__main__":

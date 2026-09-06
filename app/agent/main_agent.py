@@ -9,13 +9,20 @@ session_id 创建独立工作目录，并把工具调用、子智能体调用和
 import asyncio
 import shutil
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from deepagents import create_deep_agent
 
+from app.agent.instrumentation import instrumentation_callback
 from app.agent.llm import model
-from app.agent.observability_middleware import observability_middleware
 from app.agent.prompts import main_agent_content
+from app.agent.run_context import (
+    RunContext,
+    reset_run_context,
+    run_registry,
+    set_current_run_context,
+)
 from app.agent.subagents.database_query_agent import database_query_agent
 from app.agent.subagents.knowledge_base_agent import knowledge_base_agent
 from app.agent.subagents.network_search_agent import network_search_agent
@@ -25,6 +32,8 @@ from app.api.context import (
     set_thread_context,
 )
 from app.api.monitor import monitor
+from app.agent.budget import BudgetConfig
+from app.persistence.trace_store import get_trace_store
 from app.utils.logger import get_logger
 
 # 文件类工具由主智能体直接掌握，负责读取上传附件和生成最终交付文档
@@ -55,9 +64,8 @@ def init_main_agent(checkpointer):
         tools=[generate_markdown, convert_md_to_pdf, read_file_content],
         checkpointer=checkpointer,
         subagents=[database_query_agent, network_search_agent, knowledge_base_agent],
-        middleware=[observability_middleware],
     )
-    _logger.info("Agent initialized with injected checkpointer and observability middleware")
+    _logger.info("Agent initialized with injected checkpointer (instrumentation via callbacks)")
 
 
 def get_main_agent():
@@ -72,8 +80,17 @@ def get_main_agent():
 # 当前文件位于 app/agent/main_agent.py，parents[1] 即 app 目录
 project_root_path = Path(__file__).parents[1].resolve()
 
+# 软停止收尾指令：预算触达上限时注入，让模型用已有信息产出阶段性成果而非硬中断
+WRAP_UP_PROMPT = (
+    "【预算提示】本次任务的 {dim} 预算已接近上限。请立即停止调用工具，"
+    "基于已收集到的信息完成最终总结与交付，不要再发起新的工具调用或子智能体任务。"
+)
 
-async def run_deep_agent(task_query, session_id, resume=False):
+# 硬超时倍率：在 max_runtime 之上再给 1.5 倍窗口兜底（含收尾阶段），超时则强制终止
+_HARD_TIMEOUT_FACTOR = 1.5
+
+
+async def run_deep_agent(task_query, session_id, resume=False, budget_config=None, run_id=None):
     """
     异步流式执行主智能体
 
@@ -82,6 +99,8 @@ async def run_deep_agent(task_query, session_id, resume=False):
     :param task_query: 前端提交的原始任务问题
     :param session_id: 当前任务 ID，同时用于 thread_id、输出目录和 WebSocket 定向推送
     :param resume: 是否为恢复执行；True 时跳过路径指令注入，传入 None 从检查点恢复
+    :param budget_config: per-task 预算覆盖（None 时用环境变量默认值）
+    :param run_id: 本次执行尝试的 ID（None 时自动生成）；与 trace_id 一致，同 thread 可多 run
     """
     _logger.info(
         "开始执行会话",
@@ -121,8 +140,19 @@ async def run_deep_agent(task_query, session_id, resume=False):
     # 前端拿到工作目录后，可以展示本次任务生成的 Markdown/PDF 等产物
     monitor.report_session_dir(session_dir_str)
 
+    # 建 RunContext：承载本次 run 的预算账本与 trace span 缓冲，经 ContextVar 传播到子智能体
+    run_ctx = RunContext(thread_id=session_id, budget_config=budget_config, run_id=run_id)
+    run_registry.register(run_ctx)
+    run_context_token = set_current_run_context(run_ctx)
+
     # checkpointer 依赖 thread_id 区分会话记忆；同一 session_id 会复用同一条执行上下文
-    config = {"configurable": {"thread_id": session_id}}
+    # callbacks 经 LangGraph 传播到主 Agent + 子智能体子图 + 所有 ToolNode（覆盖子智能体内部）
+    # recursion_limit 作为 max_iterations 的图级硬后底（= max_iterations + 5），防软停止漏触发时无限循环
+    config = {
+        "configurable": {"thread_id": session_id},
+        "callbacks": [instrumentation_callback],
+        "recursion_limit": run_ctx.budget.config.max_iterations + 5,
+    }
 
     # 工作环境指令是运行时动态补充的，约束模型只在当前会话目录读写文件
     # 恢复执行时跳过指令注入，因为上一次执行时已经注入了相同的指令
@@ -144,21 +174,23 @@ async def run_deep_agent(task_query, session_id, resume=False):
     # 追踪子智能体调用的起始时间，用于在 model node 检测完成后上报 subagent_end
     _assistant_start_times: dict[str, float] = {}
 
-    try:
-        # 恢复执行时传入 None 让 LangGraph 从最后一个 checkpoint 自动恢复
-        # 正常执行时传入完整消息
-        if resume:
-            stream_input = None
-        else:
-            stream_input = {
-                "messages": [{"role": "user", "content": task_query + path_instruction}]
-            }
+    # 恢复执行时传入 None 让 LangGraph 从最后一个 checkpoint 自动恢复；正常执行传入完整消息
+    if resume:
+        stream_input = None
+    else:
+        stream_input = {
+            "messages": [{"role": "user", "content": task_query + path_instruction}]
+        }
 
-        # astream 会持续产出模型节点、工具节点和子智能体节点的状态片段
-        async for chunk in get_main_agent().astream(
-            stream_input,
-            config=config,
-        ):
+    async def _consume(stream_input_arg, *, is_wrapup=False):
+        """消费 astream 流；每 chunk 查墙钟预算与已触达标志，触达即 break（软停止）
+
+        :param is_wrapup: 收尾阶段；True 时不再因 budget.exhausted 二次软停止（防递归）
+        """
+        async for chunk in get_main_agent().astream(stream_input_arg, config=config):
+            # 墙钟预算周期性检查 + 已触达上限检查
+            if run_ctx.budget.check_runtime() or (run_ctx.budget.exhausted and not is_wrapup):
+                break
             # chunk 形如 {“model”: {“messages”: [...]}}，这里主要关心模型最新消息
             for node_name, state in chunk.items():
                 if not state or "messages" not in state:
@@ -175,40 +207,67 @@ async def run_deep_agent(task_query, session_id, resume=False):
                                     subagent_type = tool_call["args"]["subagent_type"]
                                     monitor.report_assistant(
                                         subagent_type,
-                                        {
-                                            "description": tool_call["args"]["description"]
-                                        },
+                                        {"description": tool_call["args"]["description"]},
                                     )
-                                    _assistant_start_times[subagent_type] = time.perf_counter()     # 记录当前时间戳
-                                else:
-                                    # 非 task 的工具调用，由中间件（Phase 3）或工具层处理
-                                    pass
+                                    _assistant_start_times[subagent_type] = time.perf_counter()
                         elif last_msg.content:
                             # 当 model node 产出最终回复时，检查是否有子智能体刚完成
-                            # 子智能体的 tool result 通常在上一个 chunk 中返回
                             if _assistant_start_times:
                                 for assistant_name, start_time in list(_assistant_start_times.items()):
                                     duration_ms = (time.perf_counter() - start_time) * 1000
-                                    monitor.report_assistant_end(assistant_name, duration_ms)  # 保留子智能体调用成功上报
+                                    monitor.report_assistant_end(assistant_name, duration_ms)
                                     del _assistant_start_times[assistant_name]
-
                             # 模型没有继续调用工具时，最新文本内容就是本轮可反馈给前端的结果
-                            _logger.info(
-                                f"主智能体本轮结果: {str(last_msg.content)[:100]}"
-                            )
-                            monitor.report_task_result(last_msg.content)                        # 上报最终任务完成进度
+                            _logger.info(f"主智能体本轮结果: {str(last_msg.content)[:100]}")
+                            monitor.report_task_result(last_msg.content)
 
+    try:
+        # 两阶段执行：正常消费 → 若预算触达则注入收尾指令再消费一轮
+        hard_cap = run_ctx.budget.config.max_runtime_s * _HARD_TIMEOUT_FACTOR
+        await asyncio.wait_for(_consume(stream_input), timeout=hard_cap)
 
+        if run_ctx.budget.exhausted:
+            dim = run_ctx.budget.exhausted.value
+            _logger.info("预算触达上限,注入收尾指令", extra={"dimension": dim, "thread_id": session_id})
+            monitor._emit("budget_soft_stop", f"预算触达 {dim},进入收尾阶段", {"dimension": dim})
+            wrap_up = {"messages": [{"role": "user", "content": WRAP_UP_PROMPT.format(dim=dim)}]}
+            # 收尾阶段使用剩余的墙钟预算(至少 10s),不再二次软停止
+            remaining = max(10.0, hard_cap - (time.perf_counter() - run_ctx.budget.started_at))
+            await asyncio.wait_for(_consume(wrap_up, is_wrapup=True), timeout=remaining)
+
+        run_ctx.finalize("completed")
+    except asyncio.TimeoutError:
+        # 硬超时兜底：收尾阶段也超时或主阶段 stall，强制终止
+        _logger.error("硬超时兜底触发", extra={"thread_id": session_id})
+        monitor._emit("error", f"任务硬超时(max_runtime×{_HARD_TIMEOUT_FACTOR}),强制终止")
+        run_ctx.finalize("failed")
     except asyncio.CancelledError:
         monitor.report_task_cancelled()
+        run_ctx.finalize("cancelled")
         raise
     except Exception as e:
         # 异步执行异常也走 monitor，保证前端能收到明确错误事件
-        _logger.error(f"执行主智能发生异常", extra={"error": str(e)})
+        _logger.error("执行主智能发生异常", extra={"error": str(e)})
         monitor._emit("error", f"执行主智能发生异常信息：{str(e)}")
+        run_ctx.finalize("failed")
     finally:
-        # 任务结束后恢复 ContextVar，避免后续请求复用到本次会话目录或 thread_id
+        # 持久化本次 run 的完整 trace span 树到 Redis 近期窗口（失败不影响终态）
+        try:
+            await get_trace_store().save_trace(
+                run_id=run_ctx.run_id,
+                thread_id=session_id,
+                spans=run_ctx.collapsed_span_dicts(),
+                status=run_ctx.status,
+                started_at=run_ctx.started_at_iso,
+                ended_at=run_ctx.ended_at_iso or datetime.now(timezone.utc).isoformat(),
+                budget_snapshot=run_ctx.budget.snapshot(),
+            )
+        except Exception as trace_err:
+            _logger.warning("Trace flush failed", extra={"run_id": run_ctx.run_id, "error": str(trace_err)})
+        run_registry.unregister(run_ctx.run_id)
+        # 任务结束后恢复 ContextVar，避免本次会话目录/thread_id 残留到后续请求
         reset_session_context(session_dir_token, session_id_token)
+        reset_run_context(run_context_token)
 
 
 if __name__ == "__main__":

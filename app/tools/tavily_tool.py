@@ -17,6 +17,7 @@ from langchain_core.tools import tool
 from tavily import TavilyClient
 
 from app.api.monitor import monitor
+from app.agent.recovery import resilient
 from app.persistence.cache_store import check_cache, save_to_cache, init_cache
 from app.utils.logger import get_logger
 
@@ -38,7 +39,9 @@ def _build_cache_query(query: str, topic: str, max_results: int) -> str:
 
 
 # @tool 会把函数签名和 docstring 暴露给 DeepAgents，模型据此决定是否调用以及如何填参
+# @resilient 在工具层提供瞬态重试(退避)+ 熔断器 + 错误回注 LLM,覆盖原 tavily 缺失的错误处理
 @tool
+@resilient(tool_name="internet_search")
 async def internet_search(
     query: str,
     topic: Literal["news", "finance", "general"] = "general",
