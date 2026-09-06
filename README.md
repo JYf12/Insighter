@@ -43,6 +43,14 @@ Insighter 是一个基于 **DeepAgents** 框架构建的多智能体深度研究
 | Docker | >= 20 | MySQL / Redis 容器化部署 |
 | uv | 推荐 | Python 包管理（也可用 pip） |
 
+## 后端启动
+
+```bash
+uvicorn app.api.server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+启动后访问 `http://localhost:8000`，`--reload` 参数开启热重载，代码修改后自动重启。
+
 ## 快速开始
 
 ### 1. 克隆项目
@@ -233,7 +241,7 @@ deepsearch-agents/
 | MySQL 8.4 | 业务数据存储 |
 | Redis 7 | 缓存 / 任务队列 / Trace 存储 |
 | SentenceTransformers | 本地语义嵌入与缓存加速 |
-| ReportLab | Markdown → PDF 转换（支持中文） |
+| ReportLab | Markdown → PDF 转换 |
 
 ## 开发说明
 
