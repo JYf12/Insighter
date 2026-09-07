@@ -86,7 +86,8 @@ WRAP_UP_PROMPT = (
     "基于已收集到的信息完成最终总结与交付，不要再发起新的工具调用或子智能体任务。"
 )
 
-# 硬超时倍率：在 max_runtime 之上再给 1.5 倍窗口兜底（含收尾阶段），超时则强制终止
+# 主阶段硬超时倍率：单次超长主调用(max_runtime 未及时触发软停止)的物理上限,
+# 在主阶段之上多给 factor 倍;收尾阶段另用 BUDGET_WRAPUP_GRACE_S 固定窗口。
 _HARD_TIMEOUT_FACTOR = 1.5
 
 
@@ -188,8 +189,11 @@ async def run_deep_agent(task_query, session_id, resume=False, budget_config=Non
         :param is_wrapup: 收尾阶段；True 时不再因 budget.exhausted 二次软停止（防递归）
         """
         async for chunk in get_main_agent().astream(stream_input_arg, config=config):
-            # 墙钟预算周期性检查 + 已触达上限检查
-            if run_ctx.budget.check_runtime() or (run_ctx.budget.exhausted and not is_wrapup):
+            # 软停止边界:
+            # - 主阶段:墙钟超时 或 任一维度预算触达 → break(软停止)
+            # - 收尾阶段(is_wrapup=True):不再因预算/墙钟 break,靠外层 wait_for 硬超时兜底,
+            #   给模型机会基于已有信息产出最终答复
+            if not is_wrapup and (run_ctx.budget.check_runtime() or run_ctx.budget.exhausted):
                 break
             # chunk 形如 {“model”: {“messages”: [...]}}，这里主要关心模型最新消息
             for node_name, state in chunk.items():
@@ -231,15 +235,16 @@ async def run_deep_agent(task_query, session_id, resume=False, budget_config=Non
             _logger.info("预算触达上限,注入收尾指令", extra={"dimension": dim, "thread_id": session_id})
             monitor._emit("budget_soft_stop", f"预算触达 {dim},进入收尾阶段", {"dimension": dim})
             wrap_up = {"messages": [{"role": "user", "content": WRAP_UP_PROMPT.format(dim=dim)}]}
-            # 收尾阶段使用剩余的墙钟预算(至少 10s),不再二次软停止
-            remaining = max(10.0, hard_cap - (time.perf_counter() - run_ctx.budget.started_at))
-            await asyncio.wait_for(_consume(wrap_up, is_wrapup=True), timeout=remaining)
+            # 收尾阶段使用固定宽限窗口(不查各预算,否则会在产出前 break);
+            # 超时即强制终止,由下方 except 兜底
+            grace_s = run_ctx.budget.config.wrapup_grace_s
+            await asyncio.wait_for(_consume(wrap_up, is_wrapup=True), timeout=grace_s)
 
         run_ctx.finalize("completed")
     except asyncio.TimeoutError:
-        # 硬超时兜底：收尾阶段也超时或主阶段 stall，强制终止
+        # 硬超时兜底：主阶段 stall(> max_runtime×factor)或收尾超宽限窗口，强制终止
         _logger.error("硬超时兜底触发", extra={"thread_id": session_id})
-        monitor._emit("error", f"任务硬超时(max_runtime×{_HARD_TIMEOUT_FACTOR}),强制终止")
+        monitor._emit("error", f"任务超时,强制终止(主阶段超 max_runtime×{_HARD_TIMEOUT_FACTOR} 或收尾超宽限窗口)")
         run_ctx.finalize("failed")
     except asyncio.CancelledError:
         monitor.report_task_cancelled()
