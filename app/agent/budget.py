@@ -38,6 +38,9 @@ class BudgetConfig:
     max_runtime_s: float = 300.0
     max_tool_calls: int = 30
     max_tokens: int = 80000
+    # 预算触发后,收尾阶段允许的最大时长(秒)。收尾阶段不再查各预算,
+    # 只用这一个固定窗口给模型产出最终答复的机会,超时则强制终止。
+    wrapup_grace_s: float = 30.0
 
     @classmethod
     def from_env(cls, **overrides) -> "BudgetConfig":
@@ -60,6 +63,7 @@ class BudgetConfig:
             max_runtime_s=_env_float("BUDGET_MAX_RUNTIME_S", cls.max_runtime_s),
             max_tool_calls=_env_int("BUDGET_MAX_TOOL_CALLS", cls.max_tool_calls),
             max_tokens=_env_int("BUDGET_MAX_TOKENS", cls.max_tokens),
+            wrapup_grace_s=_env_float("BUDGET_WRAPUP_GRACE_S", cls.wrapup_grace_s),
         )
         # per-task 覆盖优先于环境变量
         for k, v in overrides.items():
@@ -131,13 +135,19 @@ class Budget:
             return self._exhausted
 
     def check_runtime(self) -> Optional[BudgetDimension]:
-        """在 astream 循环中周期性检查墙钟预算"""
+        """检查墙钟预算是否超时(只反映墙钟,不因其他维度 exhausted 短路)。
+
+        返回 RUNTIME 表示墙钟已超;返回 None 表示仍有时间。
+        其他维度已 exhausted 不影响本方法——收尾阶段需要靠它判断墙钟是否耗尽,
+        若在此短路会导致收尾 astream 在产出前就被 break(软停止空转)。
+        """
         with self._lock:
-            if self._exhausted:
-                return self._exhausted
             if time.perf_counter() >= self.deadline:
-                self._exhausted = BudgetDimension.RUNTIME
-            return self._exhausted
+                # 保持"先到先得":只有尚未有其他维度触发时才记录 RUNTIME 为 exhausted
+                if self._exhausted is None:
+                    self._exhausted = BudgetDimension.RUNTIME
+                return BudgetDimension.RUNTIME
+            return None
 
     def snapshot(self) -> dict:
         """导出当前预算使用快照,供 trace/metrics"""
@@ -147,6 +157,7 @@ class Budget:
                 "max_runtime_s": self.config.max_runtime_s,
                 "max_tool_calls": self.config.max_tool_calls,
                 "max_tokens": self.config.max_tokens,
+                "wrapup_grace_s": self.config.wrapup_grace_s,
                 "iterations": self._iterations,
                 "tool_calls": self._tool_calls,
                 "tokens": self._tokens,

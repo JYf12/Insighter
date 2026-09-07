@@ -56,6 +56,14 @@ def test_runtime_exhaustion():
     assert b.check_runtime() == BudgetDimension.RUNTIME
 
 
+def test_check_runtime_not_short_circuited_by_other_dimension():
+    """其他维度先 exhausted 时,check_runtime 在墙钟未超时仍应返回 None(否则收尾阶段会空转)"""
+    b = Budget(config=BudgetConfig(max_iterations=1, max_runtime_s=60, max_tool_calls=100, max_tokens=100000))
+    assert b.consume_iteration() == BudgetDimension.ITERATIONS  # exhausted = ITERATIONS
+    # 墙钟远未超时,不应被 ITERATIONS 短路返回非 None
+    assert b.check_runtime() is None
+
+
 def test_first_dimension_wins():
     """先触达的维度锁定 exhausted,后续维度不再覆盖"""
     b = Budget(config=BudgetConfig(max_iterations=1, max_runtime_s=60, max_tool_calls=100, max_tokens=100000))
@@ -80,6 +88,7 @@ if __name__ == "__main__":
     test_tool_calls_exhaustion()
     test_tokens_exhaustion()
     test_runtime_exhaustion()
+    test_check_runtime_not_short_circuited_by_other_dimension()
     test_first_dimension_wins()
     test_snapshot()
     print("PASS: budget tests passed")
